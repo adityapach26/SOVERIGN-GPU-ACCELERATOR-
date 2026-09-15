@@ -1,0 +1,32 @@
+# Build directories and artifacts
+build/
+.cache/
+bin/
+lib/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+
+# Compiled binaries and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+
+# IDE and editor artifacts
+.vs/
+.vscode/
+.idea/
+*.user
+*.swp
+*~

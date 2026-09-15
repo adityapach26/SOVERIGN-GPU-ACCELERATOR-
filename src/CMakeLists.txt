@@ -20,5 +20,6 @@ if(SANKHYA_ENABLE_CUDA)
         gpu/vram_arena.cu
         gpu/device_model.cu
         gpu/hbf.cu
+        cuda/pricing.cu
     )
 endif()

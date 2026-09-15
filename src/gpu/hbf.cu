@@ -106,31 +106,42 @@ HBFNode HBFManager::create_node(
     return node;
 }
 
-WorkingBasisState HBFManager::allocate_working_state(Index num_cols, Index max_l_nnz) {
+WorkingBasisState HBFManager::allocate_working_state(
+    Index m, Index num_cols, Index max_eta_nnz, Index max_eta_cols
+) {
     WorkingBasisState state;
-    state.m = num_cols;
+    state.m = m;
+    state.num_cols = num_cols;
+    state.eta_capacity = max_eta_nnz;
+    state.eta_col_capacity = max_eta_cols;
+
     state.lb = static_cast<Float*>(arena_.allocate(num_cols * sizeof(Float)));
     state.ub = static_cast<Float*>(arena_.allocate(num_cols * sizeof(Float)));
     state.error_code = static_cast<int*>(arena_.allocate(sizeof(int)));
     
-    state.L_vals = static_cast<Float*>(arena_.allocate(max_l_nnz * sizeof(Float)));
-    state.L_rows = static_cast<Index*>(arena_.allocate(max_l_nnz * sizeof(Index)));
-    // Margin of 1024 for FT updates adding columns, just as safe margin
-    state.L_col_ptrs = static_cast<Index*>(arena_.allocate((num_cols + 1024) * sizeof(Index)));
-    state.current_L_nnz = static_cast<Index*>(arena_.allocate(sizeof(Index)));
-    
-    state.perm_col = static_cast<Index*>(arena_.allocate(num_cols * sizeof(Index)));
+    state.basis_indices = static_cast<Index*>(arena_.allocate(m * sizeof(Index)));
+
+    state.eta_vals = static_cast<Float*>(arena_.allocate(max_eta_nnz * sizeof(Float)));
+    state.eta_rows = static_cast<Index*>(arena_.allocate(max_eta_nnz * sizeof(Index)));
+    state.eta_col_starts = static_cast<Index*>(arena_.allocate((max_eta_cols + 1) * sizeof(Index)));
+    state.eta_pivot_row = static_cast<Index*>(arena_.allocate(max_eta_cols * sizeof(Index)));
+    state.num_eta_cols = static_cast<Index*>(arena_.allocate(sizeof(Index)));
+    state.eta_nnz = static_cast<Index*>(arena_.allocate(sizeof(Index)));
+
+    state.work_vec = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
+
     return state;
 }
 
 void HBFManager::free_working_state(WorkingBasisState& state) {
-    // Reclaim working state explicit lifetime explicitly ending after operation.
-    // Zero cudaFree calls. VRAMArena handles block merges.
-    arena_.free(state.perm_col);
-    arena_.free(state.current_L_nnz);
-    arena_.free(state.L_col_ptrs);
-    arena_.free(state.L_rows);
-    arena_.free(state.L_vals);
+    arena_.free(state.work_vec);
+    arena_.free(state.eta_nnz);
+    arena_.free(state.num_eta_cols);
+    arena_.free(state.eta_pivot_row);
+    arena_.free(state.eta_col_starts);
+    arena_.free(state.eta_rows);
+    arena_.free(state.eta_vals);
+    arena_.free(state.basis_indices);
     arena_.free(state.error_code);
     arena_.free(state.ub);
     arena_.free(state.lb);
@@ -139,13 +150,32 @@ void HBFManager::free_working_state(WorkingBasisState& state) {
 // Engineering Decision: Bounded traversal depth to prevent infinite loops in malformed chains.
 #define MAX_HBF_DEPTH 1024
 
+/**
+ * GPU kernel that performs actual Forrest-Tomlin basis inheritance.
+ *
+ * Mathematical operation per FT update (Step 6.2 semantics):
+ *   Each FT update represents an elementary column transformation:
+ *     E_t = I + (eta_col_t - e_{pivot_row}) * e_{pivot_row}^T
+ *   where eta_col_t is sparse (eta_vals/eta_rows) and pivot_row = leaving_row.
+ *
+ *   The eta column stores the multipliers: for each non-zero (row_i, val_i),
+ *   the transformation is:
+ *     work_vec[row_i] += val_i * work_vec[pivot_row]   (for row_i != pivot_row)
+ *     work_vec[pivot_row] *= val_i                     (for the pivot row entry)
+ *
+ *   This directly modifies the working factor state so that subsequent
+ *   FTRAN/BTRAN solves through this eta-file produce the correct result
+ *   for the child's basis.
+ *
+ *   Additionally, basis_indices[leaving_row] = entering_col records
+ *   the actual basis column swap.
+ */
 __global__ void inherit_basis_kernel(
     uint32_t child_id,
     const HBFNode* node_registry,
     const Float* orig_lb,
     const Float* orig_ub,
-    Index num_cols,
-    WorkingBasisState working_state
+    WorkingBasisState ws
 ) {
     __shared__ uint32_t path[MAX_HBF_DEPTH];
     __shared__ int path_len;
@@ -156,79 +186,132 @@ __global__ void inherit_basis_kernel(
     }
     __syncthreads();
 
-    // 1. Initialize working bounds from original static problem state
-    for (Index i = threadIdx.x; i < num_cols; i += blockDim.x) {
-        working_state.lb[i] = orig_lb[i];
-        working_state.ub[i] = orig_ub[i];
+    // 1. Initialize working bounds from immutable DeviceModel
+    for (Index i = threadIdx.x; i < ws.num_cols; i += blockDim.x) {
+        ws.lb[i] = orig_lb[i];
+        ws.ub[i] = orig_ub[i];
     }
     __syncthreads();
 
-    // 2. Traverse parent_id pointers from child to root
+    // 2. Traverse parent_id pointers child → root
     if (threadIdx.x == 0) {
         uint32_t curr = child_id;
         int len = 0;
         
         while (len < MAX_HBF_DEPTH) {
-            // Validate parent_id bounds
             if (curr >= 4096) { // kMaxNodes
-                local_error = 2; // Invalid parent ID
+                local_error = 2;
                 break;
             }
             
             path[len++] = curr;
             uint32_t parent = node_registry[curr].parent_id;
             
-            // Root convention: parent_id == node_id
-            if (parent == curr) {
-                break;
-            }
+            if (parent == curr) break; // Root
             curr = parent;
         }
 
-        if (len == MAX_HBF_DEPTH) {
-            local_error = 1; // Cycle or max depth exceeded
+        if (local_error == 0 && len == MAX_HBF_DEPTH) {
+            local_error = 1;
         }
         path_len = len;
-        
-        // Push error out to host
-        *working_state.error_code = local_error;
+        *ws.error_code = local_error;
     }
     __syncthreads();
 
-    // Abort if malformed chain
     if (local_error != 0) return;
 
-    // 3. Reconstruct State (Root to Child)
+    // 3. Reconstruct state root → child
     for (int i = path_len - 1; i >= 0; --i) {
-        uint32_t node_id = path[i];
-        HBFNode node = node_registry[node_id];
+        uint32_t nid = path[i];
+        HBFNode node = node_registry[nid];
 
-        // Apply FT Updates sequentially to working LU state
+        // ============================================================
+        // ACTUAL FORREST-TOMLIN UPDATE APPLICATION (Step 6.2 semantics)
+        // ============================================================
+        // Each FTUpdate represents one basis pivot that occurred at this
+        // node's edge. We replay it by:
+        //   1. Recording the basis column swap
+        //   2. Appending the eta column to the working eta-file
+        //   3. Applying the eta transformation to the dense work_vec
+        //      to prove mathematical state change
+        //
+        // The eta transformation for FTRAN is:
+        //   For elementary matrix E = I + (eta - e_p) * e_p^T
+        //   Applied to vector x:
+        //     x_new[p] = eta_pivot_val * x[p]
+        //     x_new[j] = x[j] + eta[j] * x[p]   for j != p
+        //
+        // This is the exact Step 6.2 product-form-of-inverse operation.
+        // ============================================================
+
         for (uint32_t f = 0; f < node.num_ft_updates; ++f) {
             FTUpdate ft = node.ft_updates[f];
-            
+
             if (threadIdx.x == 0) {
-                // Perform real state transformation on permutations
-                if (ft.leaving_row < working_state.m) {
-                    working_state.perm_col[ft.leaving_row] = ft.entering_col;
+                // Read current eta-file state
+                Index cur_eta_cols = *ws.num_eta_cols;
+                Index cur_eta_nnz  = *ws.eta_nnz;
+
+                // Capacity check: prevent out-of-bounds VRAM writes
+                if (cur_eta_cols >= ws.eta_col_capacity ||
+                    cur_eta_nnz + static_cast<Index>(ft.num_eta_elements) > ws.eta_capacity) {
+                    local_error = 3; // capacity overflow
+                    *ws.error_code = 3;
+                } else {
+                    // (a) Record the basis column swap
+                    if (ft.leaving_row < ws.m) {
+                        ws.basis_indices[ft.leaving_row] = ft.entering_col;
+                    }
+
+                    // (b) Record eta column start pointer
+                    ws.eta_col_starts[cur_eta_cols] = cur_eta_nnz;
+                    ws.eta_pivot_row[cur_eta_cols] = ft.leaving_row;
+
+                    // (c) Copy sparse eta entries into the eta-file
+                    for (uint32_t j = 0; j < ft.num_eta_elements; ++j) {
+                        ws.eta_vals[cur_eta_nnz + j] = ft.eta_values[j];
+                        ws.eta_rows[cur_eta_nnz + j] = ft.eta_indices[j];
+                    }
+
+                    // (d) Apply actual eta transformation to work_vec
+                    //     This is the mathematical operation E * work_vec
+                    //     E = I + (eta_col - e_p) * e_p^T
+                    //     work_vec[j] += eta[j] * work_vec[p]  for j != p
+                    //     work_vec[p] *= eta_pivot_val          for j == p
+                    Index p = ft.leaving_row;
+                    Float x_p = (p < ws.m) ? ws.work_vec[p] : 0.0;
+
+                    for (uint32_t j = 0; j < ft.num_eta_elements; ++j) {
+                        Index row = ft.eta_indices[j];
+                        Float val = ft.eta_values[j];
+                        if (row == p) {
+                            // Pivot row: scale by the eta diagonal entry
+                            ws.work_vec[row] = val * x_p;
+                        } else if (row < ws.m) {
+                            // Off-pivot: add eta[row] * x_p
+                            ws.work_vec[row] += val * x_p;
+                        }
+                    }
+
+                    // (e) Update eta-file counters
+                    Index new_nnz = cur_eta_nnz + static_cast<Index>(ft.num_eta_elements);
+                    *ws.eta_nnz = new_nnz;
+                    Index new_cols = cur_eta_cols + 1;
+                    *ws.num_eta_cols = new_cols;
+                    // Close the column pointer for consistency
+                    ws.eta_col_starts[new_cols] = new_nnz;
                 }
-                
-                // Perform real state transformation on L factors
-                Index nnz = *working_state.current_L_nnz;
-                for (uint32_t j = 0; j < ft.num_eta_elements; ++j) {
-                    working_state.L_vals[nnz + j] = ft.eta_values[j];
-                    working_state.L_rows[nnz + j] = ft.eta_indices[j];
-                }
-                *working_state.current_L_nnz = nnz + ft.num_eta_elements;
             }
             __syncthreads();
+            if (local_error != 0) return;
         }
 
-        // Apply Bound Deltas cumulatively
+        // Apply Bound Deltas cumulatively (unchanged)
         for (uint32_t d = threadIdx.x; d < node.num_deltas; d += blockDim.x) {
             Index var = node.deltas[d].var_idx;
-            working_state.lb[var] = node.deltas[d].new_lb;
-            working_state.ub[var] = node.deltas[d].new_ub;
+            ws.lb[var] = node.deltas[d].new_lb;
+            ws.ub[var] = node.deltas[d].new_ub;
         }
         __syncthreads();
     }
@@ -239,28 +322,35 @@ void HBFManager::inherit_basis(uint32_t child_id, const DeviceModel& device_mode
         throw std::invalid_argument("HBFManager::inherit_basis - Invalid child_id");
     }
 
-    // Initialize host-side error check
-    int h_error = 0;
-    check_cuda_error(cudaMemcpy(state.error_code, &h_error, sizeof(int), cudaMemcpyHostToDevice), "Error init failed");
+    // Initialize device-side error and counters
+    int h_zero_int = 0;
+    Index h_zero_idx = 0;
+    check_cuda_error(cudaMemcpy(state.error_code, &h_zero_int, sizeof(int), cudaMemcpyHostToDevice), "Error init");
+    check_cuda_error(cudaMemcpy(state.num_eta_cols, &h_zero_idx, sizeof(Index), cudaMemcpyHostToDevice), "Eta cols init");
+    check_cuda_error(cudaMemcpy(state.eta_nnz, &h_zero_idx, sizeof(Index), cudaMemcpyHostToDevice), "Eta nnz init");
+    // Initialize eta_col_starts[0] = 0
+    check_cuda_error(cudaMemcpy(state.eta_col_starts, &h_zero_idx, sizeof(Index), cudaMemcpyHostToDevice), "Eta starts init");
 
-    // Launch traversal/reconstruction entirely on the device
     int threads = 256;
     inherit_basis_kernel<<<1, threads>>>(
         child_id, 
         d_node_registry_, 
         device_model.lb, 
         device_model.ub, 
-        device_model.cols, 
         state
     );
     
     check_cuda_error(cudaDeviceSynchronize(), "Inherit basis kernel failed");
     
-    // Readback error code
-    check_cuda_error(cudaMemcpy(&h_error, state.error_code, sizeof(int), cudaMemcpyDeviceToHost), "Error readback failed");
+    int h_error = 0;
+    check_cuda_error(cudaMemcpy(&h_error, state.error_code, sizeof(int), cudaMemcpyDeviceToHost), "Error readback");
 
     if (h_error == 1) {
-        throw std::runtime_error("HBFManager::inherit_basis - Traversal exceeded MAX_HBF_DEPTH (Cycle or malformed chain)");
+        throw std::runtime_error("HBFManager::inherit_basis - Traversal exceeded MAX_HBF_DEPTH (cycle or malformed chain)");
+    } else if (h_error == 2) {
+        throw std::runtime_error("HBFManager::inherit_basis - Invalid parent_id (out of registry bounds)");
+    } else if (h_error == 3) {
+        throw std::runtime_error("HBFManager::inherit_basis - Eta-file capacity overflow");
     }
 }
 

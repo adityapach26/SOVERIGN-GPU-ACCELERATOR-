@@ -70,23 +70,44 @@ struct HBFNode {
  * Allocated exclusively through VRAMArena. Its lifetime ends precisely 
  * when the orchestrating component completes the operation, enforcing
  * strict residency boundaries (no per-node permanent duplicate states).
+ *
+ * The working LU state uses an eta-file representation consistent with
+ * Step 6.2 Forrest-Tomlin semantics:
+ *   Each FT update is an elementary matrix E_i = I + eta_col_i * e_{pivot_row_i}^T
+ *   stored as a sequence of sparse eta columns.
+ *   FTRAN applies: x <- E_1 * E_2 * ... * E_k * x  (root-to-child order)
+ *
+ * The basis_indices array tracks which original column of A occupies each
+ * basis position, mirroring Step 6.2's basis_copy_.basic_indices.
  */
 struct WorkingBasisState {
     Float* lb;
     Float* ub;
-    int* error_code; // 0 = success, 1 = max_depth exceeded, 2 = malformed chain
+    int* error_code; // 0=ok, 1=max_depth, 2=invalid parent, 3=capacity overflow
 
-    // Dimensions/Metadata
-    Index m;
+    // Dimensions
+    Index m;             // basis dimension (= number of rows/constraints)
+    Index num_cols;      // total number of variables
 
-    // Temporary working LU / factor state (Forrest-Tomlin semantics)
-    Float* L_vals;
-    Index* L_rows;
-    Index* L_col_ptrs;
-    Index* current_L_nnz; // Device pointer to scalar
+    // Basis column tracking (mirrors basis_copy_.basic_indices from Step 6.2)
+    // basis_indices[i] = column index of A in basis position i
+    Index* basis_indices;
 
-    // Required permutation/update state
-    Index* perm_col;
+    // Eta-file: sequence of FT elementary column transformations
+    // eta_vals[eta_col_starts[t] .. eta_col_starts[t+1]-1] = non-zero values
+    // eta_rows[eta_col_starts[t] .. eta_col_starts[t+1]-1] = row indices
+    // eta_pivot_row[t] = pivot row for eta transformation t
+    Float* eta_vals;
+    Index* eta_rows;
+    Index* eta_col_starts;   // length = num_eta_cols + 1
+    Index* eta_pivot_row;    // length = num_eta_cols
+    Index* num_eta_cols;     // device scalar: current number of eta columns
+    Index* eta_nnz;          // device scalar: current total non-zeros in eta file
+    Index  eta_capacity;     // host-side: max non-zeros allocated
+    Index  eta_col_capacity; // host-side: max eta columns allocated
+
+    // Dense working vector for FTRAN/BTRAN operations
+    Float* work_vec;
 };
 
 /**
@@ -132,8 +153,15 @@ public:
 
     /**
      * @brief Allocates temporary working state for inheritance.
+     * @param m Basis dimension (number of constraints)
+     * @param num_cols Total number of variables
+     * @param max_eta_nnz Maximum total non-zeros across all eta columns
+     * @param max_eta_cols Maximum number of eta column transformations
      */
-    WorkingBasisState allocate_working_state(Index num_cols, Index max_l_nnz = 10000);
+    WorkingBasisState allocate_working_state(
+        Index m, Index num_cols, 
+        Index max_eta_nnz = 10000, Index max_eta_cols = 1000
+    );
 
     /**
      * @brief Explicitly releases working state back to the arena.

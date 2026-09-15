@@ -73,9 +73,9 @@ struct HBFNode {
  *
  * The working LU state uses an eta-file representation consistent with
  * Step 6.2 Forrest-Tomlin semantics:
- *   Each FT update is an elementary matrix E_i = I + eta_col_i * e_{pivot_row_i}^T
- *   stored as a sequence of sparse eta columns.
- *   FTRAN applies: x <- E_1 * E_2 * ... * E_k * x  (root-to-child order)
+ *   For a basis update B_new = B * E_i, the stored sparse eta vector
+ *   represents the INVERSE transformation E_i^{-1} = I + (eta_col_i - e_p) * e_p^T
+ *   FTRAN applies the inverse transformations: x <- E_1^{-1} * E_2^{-1} * ... * E_k^{-1} * x (root-to-child order)
  *
  * The basis_indices array tracks which original column of A occupies each
  * basis position, mirroring Step 6.2's basis_copy_.basic_indices.

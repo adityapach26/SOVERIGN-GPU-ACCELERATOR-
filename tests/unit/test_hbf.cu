@@ -291,6 +291,13 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     manager.free_working_state(ws);
     arena.free(d_model.lb);
     arena.free(d_model.ub);
+
+    // ---- Test set_root_basis single-allocation safety ----
+    // 1. Same size (reuse existing allocation)
+    manager.set_root_basis({1, 0, 2, 3, 4}); 
+    // 2. Different size (release old, allocate new)
+    manager.set_root_basis({1, 0, 2, 3, 4, 5, 6, 7, 8, 9});
+
     manager.free_all_nodes();
     REQUIRE(arena.occupancy_percentage() == 0);
 }

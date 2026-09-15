@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <algorithm>
+
 namespace sankhya {
 namespace gpu {
 
@@ -27,12 +29,23 @@ HBFManager::HBFManager(VRAMArena& arena) : arena_(arena) {
 void HBFManager::set_root_basis(const std::vector<Index>& host_root_basis) {
     if (host_root_basis.empty()) return;
     
+    Index new_size = static_cast<Index>(host_root_basis.size());
+
     // Only allocate if we haven't already or if size changed
-    if (d_root_basis_ == nullptr || root_basis_size_ != static_cast<Index>(host_root_basis.size())) {
+    if (d_root_basis_ == nullptr || root_basis_size_ != new_size) {
+        if (d_root_basis_ != nullptr) {
+            // Remove old allocation from tracking and free it
+            auto it = std::find(tracked_allocations_.begin(), tracked_allocations_.end(), d_root_basis_);
+            if (it != tracked_allocations_.end()) {
+                tracked_allocations_.erase(it);
+            }
+            arena_.free(d_root_basis_);
+        }
+        
         std::size_t bytes = host_root_basis.size() * sizeof(Index);
         d_root_basis_ = static_cast<Index*>(arena_.allocate(bytes));
         tracked_allocations_.push_back(d_root_basis_);
-        root_basis_size_ = static_cast<Index>(host_root_basis.size());
+        root_basis_size_ = new_size;
     }
     
     check_cuda_error(
@@ -171,18 +184,19 @@ void HBFManager::free_working_state(WorkingBasisState& state) {
  * GPU kernel that performs actual Forrest-Tomlin basis inheritance.
  *
  * Mathematical operation per FT update (Step 6.2 semantics):
- *   Each FT update represents an elementary column transformation:
- *     E_t = I + (eta_col_t - e_{pivot_row}) * e_{pivot_row}^T
+ *   For a basis update B_new = B * E_t, the stored FT update represents
+ *   the INVERSE elementary transformation E_t^{-1}:
+ *     E_t^{-1} = I + (eta_col_t - e_{pivot_row}) * e_{pivot_row}^T
  *   where eta_col_t is sparse (eta_vals/eta_rows) and pivot_row = leaving_row.
  *
- *   The eta column stores the multipliers: for each non-zero (row_i, val_i),
- *   the transformation is:
- *     work_vec[row_i] += val_i * work_vec[pivot_row]   (for row_i != pivot_row)
- *     work_vec[pivot_row] *= val_i                     (for the pivot row entry)
+ *   When applying the inverse transformation to a vector x:
+ *     x[row_i] += val_i * x[pivot_row]   (for row_i != pivot_row)
+ *     x[pivot_row] *= val_i              (for the pivot row entry)
  *
- *   This directly modifies the working factor state so that subsequent
+ *   This directly applies the E_t^{-1} transformation so that subsequent
  *   FTRAN/BTRAN solves through this eta-file produce the correct result
- *   for the child's basis.
+ *   for the child's basis. Root-to-child replay is mathematically correct
+ *   because x <- E_k^{-1} ... E_2^{-1} E_1^{-1} x.
  *
  *   Additionally, basis_indices[leaving_row] = entering_col records
  *   the actual basis column swap.
@@ -261,7 +275,7 @@ __global__ void inherit_basis_kernel(
         //      to prove mathematical state change
         //
         // The eta transformation for FTRAN is:
-        //   For elementary matrix E = I + (eta - e_p) * e_p^T
+        //   For the INVERSE elementary matrix E^{-1} = I + (eta - e_p) * e_p^T
         //   Applied to vector x:
         //     x_new[p] = eta_pivot_val * x[p]
         //     x_new[j] = x[j] + eta[j] * x[p]   for j != p

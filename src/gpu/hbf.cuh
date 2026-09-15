@@ -75,7 +75,7 @@ struct HBFNode {
  * Step 6.2 Forrest-Tomlin semantics:
  *   For a basis update B_new = B * E_i, the stored sparse eta vector
  *   represents the INVERSE transformation E_i^{-1} = I + (eta_col_i - e_p) * e_p^T
- *   FTRAN applies the inverse transformations: x <- E_1^{-1} * E_2^{-1} * ... * E_k^{-1} * x (root-to-child order)
+ *   FTRAN applies the inverse transformations: x <- E_k^{-1} * ... * E_2^{-1} * E_1^{-1} * x (root-to-child order)
  *
  * The basis_indices array tracks which original column of A occupies each
  * basis position, mirroring Step 6.2's basis_copy_.basic_indices.

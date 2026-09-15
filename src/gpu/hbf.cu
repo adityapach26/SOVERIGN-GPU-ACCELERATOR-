@@ -313,8 +313,8 @@ __global__ void inherit_basis_kernel(
                     }
 
                     // (d) Apply actual eta transformation to work_vec
-                    //     This is the mathematical operation E * work_vec
-                    //     E = I + (eta_col - e_p) * e_p^T
+                    //     This is the mathematical operation E^{-1} * work_vec
+                    //     E^{-1} = I + (eta_col - e_p) * e_p^T
                     //     work_vec[j] += eta[j] * work_vec[p]  for j != p
                     //     work_vec[p] *= eta_pivot_val          for j == p
                     Index p = ft.leaving_row;

@@ -106,17 +106,31 @@ HBFNode HBFManager::create_node(
     return node;
 }
 
-WorkingBasisState HBFManager::allocate_working_state(Index num_cols) {
+WorkingBasisState HBFManager::allocate_working_state(Index num_cols, Index max_l_nnz) {
     WorkingBasisState state;
+    state.m = num_cols;
     state.lb = static_cast<Float*>(arena_.allocate(num_cols * sizeof(Float)));
     state.ub = static_cast<Float*>(arena_.allocate(num_cols * sizeof(Float)));
     state.error_code = static_cast<int*>(arena_.allocate(sizeof(int)));
+    
+    state.L_vals = static_cast<Float*>(arena_.allocate(max_l_nnz * sizeof(Float)));
+    state.L_rows = static_cast<Index*>(arena_.allocate(max_l_nnz * sizeof(Index)));
+    // Margin of 1024 for FT updates adding columns, just as safe margin
+    state.L_col_ptrs = static_cast<Index*>(arena_.allocate((num_cols + 1024) * sizeof(Index)));
+    state.current_L_nnz = static_cast<Index*>(arena_.allocate(sizeof(Index)));
+    
+    state.perm_col = static_cast<Index*>(arena_.allocate(num_cols * sizeof(Index)));
     return state;
 }
 
 void HBFManager::free_working_state(WorkingBasisState& state) {
     // Reclaim working state explicit lifetime explicitly ending after operation.
     // Zero cudaFree calls. VRAMArena handles block merges.
+    arena_.free(state.perm_col);
+    arena_.free(state.current_L_nnz);
+    arena_.free(state.L_col_ptrs);
+    arena_.free(state.L_rows);
+    arena_.free(state.L_vals);
     arena_.free(state.error_code);
     arena_.free(state.ub);
     arena_.free(state.lb);
@@ -155,6 +169,12 @@ __global__ void inherit_basis_kernel(
         int len = 0;
         
         while (len < MAX_HBF_DEPTH) {
+            // Validate parent_id bounds
+            if (curr >= 4096) { // kMaxNodes
+                local_error = 2; // Invalid parent ID
+                break;
+            }
+            
             path[len++] = curr;
             uint32_t parent = node_registry[curr].parent_id;
             
@@ -183,20 +203,26 @@ __global__ void inherit_basis_kernel(
         uint32_t node_id = path[i];
         HBFNode node = node_registry[node_id];
 
-        // Apply FT Updates (Sequential representation)
-        // Note: For Step 11.2, this proves ordering and accessibility.
-        // Full dense sparse LU matrix operations belong to a later phase.
+        // Apply FT Updates sequentially to working LU state
         for (uint32_t f = 0; f < node.num_ft_updates; ++f) {
             FTUpdate ft = node.ft_updates[f];
-            // E.g., re-apply eta vector (ft.eta_indices, ft.eta_values) to LU working state
-            // (Simulated explicitly as required structural proof)
-            if (threadIdx.x == 0 && ft.num_eta_elements > 0 && ft.eta_values != nullptr) {
-                // Ensure pointers are perfectly dereferenceable in device memory
-                Float dummy = ft.eta_values[0]; 
-                (void)dummy;
+            
+            if (threadIdx.x == 0) {
+                // Perform real state transformation on permutations
+                if (ft.leaving_row < working_state.m) {
+                    working_state.perm_col[ft.leaving_row] = ft.entering_col;
+                }
+                
+                // Perform real state transformation on L factors
+                Index nnz = *working_state.current_L_nnz;
+                for (uint32_t j = 0; j < ft.num_eta_elements; ++j) {
+                    working_state.L_vals[nnz + j] = ft.eta_values[j];
+                    working_state.L_rows[nnz + j] = ft.eta_indices[j];
+                }
+                *working_state.current_L_nnz = nnz + ft.num_eta_elements;
             }
+            __syncthreads();
         }
-        __syncthreads();
 
         // Apply Bound Deltas cumulatively
         for (uint32_t d = threadIdx.x; d < node.num_deltas; d += blockDim.x) {

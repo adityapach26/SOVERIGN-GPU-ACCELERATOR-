@@ -121,21 +121,34 @@ TEST_CASE("HBFNode - Basis State Inheritance (Step 11.2)", "[gpu][hbf][inherit]"
     gpu::HBFManager manager(arena);
     
     // 2. Build a 3-level chain: Root -> Parent -> Child
-    // Root modifies var 0
+    // Root modifies var 0 and provides base FT
     std::vector<gpu::BoundDelta> root_deltas = {{0, 5.0, 95.0}};
-    std::vector<gpu::FTUpdateHost> root_fts = {{0, 0, {1.0, 2.0}, {0, 1}}};
-    manager.create_node(10, 10, root_deltas, root_fts); // Root ID = 10, Parent ID = 10
+    std::vector<gpu::FTUpdateHost> root_fts = {{0, 40, {3.0}, {2}}}; 
+    manager.create_node(10, 10, root_deltas, root_fts); // Root ID = 10
     
-    // Parent modifies var 1 and var 0 (tightening var 0 from Root)
+    // Parent modifies var 1 and var 0
     std::vector<gpu::BoundDelta> parent_deltas = {{1, 10.0, 90.0}, {0, 15.0, 85.0}};
-    manager.create_node(11, 10, parent_deltas, {}); // Parent ID = 11, Parent ID = 10
+    std::vector<gpu::FTUpdateHost> parent_fts = {{1, 50, {4.0, 5.0}, {0, 1}}};
+    manager.create_node(11, 10, parent_deltas, parent_fts); // Parent ID = 11
     
-    // Child modifies var 2 and var 1 (tightening var 1 from Parent)
+    // Child modifies var 2 and var 1
     std::vector<gpu::BoundDelta> child_deltas = {{2, 20.0, 80.0}, {1, 30.0, 70.0}};
-    manager.create_node(12, 11, child_deltas, {}); // Child ID = 12, Parent ID = 11
+    std::vector<gpu::FTUpdateHost> child_fts = {{2, 60, {6.0}, {1}}};
+    manager.create_node(12, 11, child_deltas, child_fts); // Child ID = 12
     
     // 3. Allocate working state
-    gpu::WorkingBasisState wstate = manager.allocate_working_state(num_cols);
+    gpu::WorkingBasisState wstate = manager.allocate_working_state(num_cols, 100);
+    
+    // Initialize working state to a dummy root basis/LU state
+    std::vector<Index> h_perm_col = {10, 20, 30};
+    std::vector<Float> h_L_vals = {1.0, 2.0};
+    std::vector<Index> h_L_rows = {1, 2};
+    Index h_L_nnz = 2;
+    
+    cudaMemcpy(wstate.perm_col, h_perm_col.data(), 3 * sizeof(Index), cudaMemcpyHostToDevice);
+    cudaMemcpy(wstate.L_vals, h_L_vals.data(), 2 * sizeof(Float), cudaMemcpyHostToDevice);
+    cudaMemcpy(wstate.L_rows, h_L_rows.data(), 2 * sizeof(Index), cudaMemcpyHostToDevice);
+    cudaMemcpy(wstate.current_L_nnz, &h_L_nnz, sizeof(Index), cudaMemcpyHostToDevice);
     
     // 4. Execute entirely GPU-resident inheritance traversal
     manager.inherit_basis(12, d_model, wstate);
@@ -147,15 +160,7 @@ TEST_CASE("HBFNode - Basis State Inheritance (Step 11.2)", "[gpu][hbf][inherit]"
     cudaMemcpy(h_working_lb.data(), wstate.lb, num_cols * sizeof(Float), cudaMemcpyDeviceToHost);
     cudaMemcpy(h_working_ub.data(), wstate.ub, num_cols * sizeof(Float), cudaMemcpyDeviceToHost);
     
-    // Original bounds were [0, 100]
-    // Root -> var 0: [5, 95]
-    // Parent -> var 1: [10, 90], var 0: [15, 85]
-    // Child -> var 2: [20, 80], var 1: [30, 70]
-    // Expected Cumulative:
-    // var 0: [15, 85]
-    // var 1: [30, 70]
-    // var 2: [20, 80]
-    
+    // Expected Cumulative Bounds:
     REQUIRE(h_working_lb[0] == 15.0);
     REQUIRE(h_working_ub[0] == 85.0);
     
@@ -164,6 +169,39 @@ TEST_CASE("HBFNode - Basis State Inheritance (Step 11.2)", "[gpu][hbf][inherit]"
     
     REQUIRE(h_working_lb[2] == 20.0);
     REQUIRE(h_working_ub[2] == 80.0);
+    
+    // 6. Verify FT State Transformations
+    // Root FT: leaving_row = 0, entering_col = 40, eta = {3.0} at {2}
+    // Parent FT: leaving_row = 1, entering_col = 50, eta = {4.0, 5.0} at {0, 1}
+    // Child FT: leaving_row = 2, entering_col = 60, eta = {6.0} at {1}
+    // Expected L_nnz: 2 (base) + 1 + 2 + 1 = 6.
+    
+    Index h_final_L_nnz = 0;
+    cudaMemcpy(&h_final_L_nnz, wstate.current_L_nnz, sizeof(Index), cudaMemcpyDeviceToHost);
+    REQUIRE(h_final_L_nnz == 6);
+    
+    std::vector<Index> h_final_perm_col(3);
+    cudaMemcpy(h_final_perm_col.data(), wstate.perm_col, 3 * sizeof(Index), cudaMemcpyDeviceToHost);
+    REQUIRE(h_final_perm_col[0] == 40);
+    REQUIRE(h_final_perm_col[1] == 50);
+    REQUIRE(h_final_perm_col[2] == 60);
+    
+    std::vector<Float> h_final_L_vals(6);
+    std::vector<Index> h_final_L_rows(6);
+    cudaMemcpy(h_final_L_vals.data(), wstate.L_vals, 6 * sizeof(Float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_final_L_rows.data(), wstate.L_rows, 6 * sizeof(Index), cudaMemcpyDeviceToHost);
+    
+    // Check root FT appended
+    REQUIRE(h_final_L_vals[2] == 3.0);
+    REQUIRE(h_final_L_rows[2] == 2);
+    // Check parent FT appended
+    REQUIRE(h_final_L_vals[3] == 4.0);
+    REQUIRE(h_final_L_rows[3] == 0);
+    REQUIRE(h_final_L_vals[4] == 5.0);
+    REQUIRE(h_final_L_rows[4] == 1);
+    // Check child FT appended
+    REQUIRE(h_final_L_vals[5] == 6.0);
+    REQUIRE(h_final_L_rows[5] == 1);
     
     // Verify original bounds remained pristine and immutable
     std::vector<Float> h_pristine_lb(num_cols);

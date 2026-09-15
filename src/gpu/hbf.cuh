@@ -75,6 +75,18 @@ struct WorkingBasisState {
     Float* lb;
     Float* ub;
     int* error_code; // 0 = success, 1 = max_depth exceeded, 2 = malformed chain
+
+    // Dimensions/Metadata
+    Index m;
+
+    // Temporary working LU / factor state (Forrest-Tomlin semantics)
+    Float* L_vals;
+    Index* L_rows;
+    Index* L_col_ptrs;
+    Index* current_L_nnz; // Device pointer to scalar
+
+    // Required permutation/update state
+    Index* perm_col;
 };
 
 /**
@@ -121,7 +133,7 @@ public:
     /**
      * @brief Allocates temporary working state for inheritance.
      */
-    WorkingBasisState allocate_working_state(Index num_cols);
+    WorkingBasisState allocate_working_state(Index num_cols, Index max_l_nnz = 10000);
 
     /**
      * @brief Explicitly releases working state back to the arena.

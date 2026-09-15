@@ -15,11 +15,13 @@ namespace gpu {
 /**
  * @brief Device-resident representation of the optimization problem.
  * 
+ * The static problem data is transferred from host to device once during initialization, 
+ * eliminating repeated host-device transfers during solver execution.
+ * 
+ * DeviceModel is a non-owning view. VRAMArena owns the underlying allocation.
+ * The uploaded original problem arrays are not to be modified by later solver stages.
+ * DeviceModel does not perform individual cudaFree operations.
  * VRAMArena must strictly outlive DeviceModel.
- * DeviceModel does not own the memory pointers; they are allocated from VRAMArena.
- * To safely enforce this non-ownership, DeviceModel acts only as a trivial view 
- * struct onto the arena allocations. No individual cudaFree calls are made.
- * It strictly treats the uploaded state as immutable initialization data.
  */
 struct DeviceModel {
     // Structural metadata
@@ -39,7 +41,8 @@ struct DeviceModel {
 };
 
 /**
- * @brief Performs an O(1) host-device upload to initialize immutable static problem state.
+ * @brief The static problem data is transferred from host to device once during initialization, 
+ * eliminating repeated host-device transfers during solver execution.
  *
  * Exclusively uses `VRAMArena::allocate()` for device allocations. Zero `cudaMalloc` calls.
  * Does not silently change numerical values.

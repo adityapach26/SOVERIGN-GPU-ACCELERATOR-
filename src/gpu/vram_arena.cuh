@@ -11,8 +11,9 @@
 #include <cstddef>
 #include <vector>
 #include <mutex>
-
 #include <unordered_map>
+#include <limits>
+#include <new>
 
 namespace sankhya {
 namespace gpu {
@@ -66,6 +67,9 @@ private:
     
     // Internal helper to align size
     static std::size_t align_size(std::size_t size) {
+        if (size > std::numeric_limits<std::size_t>::max() - (kAlignment - 1)) {
+            throw std::bad_alloc(); // Deterministic failure on overflow
+        }
         return (size + kAlignment - 1) & ~(kAlignment - 1);
     }
 };

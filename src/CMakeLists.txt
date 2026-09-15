@@ -19,5 +19,6 @@ if(SANKHYA_ENABLE_CUDA)
     target_sources(sankhya_core PRIVATE
         gpu/vram_arena.cu
         gpu/device_model.cu
+        gpu/hbf.cu
     )
 endif()

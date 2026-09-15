@@ -42,5 +42,6 @@ if(SANKHYA_ENABLE_CUDA)
     target_sources(sankhya_unit_tests PRIVATE
         unit/test_vram_arena.cu
         unit/test_device_model.cu
+        unit/test_hbf.cu
     )
 endif()

@@ -5,6 +5,7 @@
 
 #include "vram_arena.cuh"
 
+#include <cmath>
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <algorithm>

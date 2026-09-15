@@ -52,7 +52,9 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
             d_model.ub = static_cast<Float*>(arena.allocate(size_ub));
         }
 
-        // Perform initialization-only device transfers (O(1) host-device upload stage).
+        // Perform initialization-only device transfers.
+        // The static problem data is transferred from host to device once during initialization, 
+        // eliminating repeated host-device transfers during solver execution.
         // Actual values are perfectly and flawlessly copied via explicit synchronization.
         check_cuda_error(
             cudaMemcpy(d_model.col_ptrs, host_model.A.col_ptrs.data(), size_col_ptrs, cudaMemcpyHostToDevice),

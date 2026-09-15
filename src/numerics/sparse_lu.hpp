@@ -108,8 +108,9 @@ private:
     const core::CSCMatrix* A_ptr_ = nullptr;
     simplex::Basis basis_copy_;
 
-    // Forrest-Tomlin / Product-Form Eta Update tracking
-    // Represents the elementary matrix E = I + (eta - e_p) * e_p^T
+    // Incremental updates representing the Forrest-Tomlin eta-file.
+    // Represents the INVERSE elementary matrix E^{-1} = I + (eta - e_p) * e_p^T
+    // applied consecutively to factorized basis updates.
     struct FTUpdate {
         Index leaving_row;
         Index entering_col;

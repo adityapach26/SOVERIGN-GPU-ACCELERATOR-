@@ -92,6 +92,10 @@ HBFNode HBFManager::create_node(
         std::vector<FTUpdate> device_fts(host_fts.size());
         for (std::size_t i = 0; i < host_fts.size(); ++i) {
             const auto& host_ft = host_fts[i];
+            if (host_ft.eta_values.size() != host_ft.eta_indices.size()) {
+                throw std::invalid_argument("HBFManager::create_node - FTUpdateHost eta_values and eta_indices size mismatch");
+            }
+
             FTUpdate d_ft;
             d_ft.leaving_row = host_ft.leaving_row;
             d_ft.entering_col = host_ft.entering_col;
@@ -398,6 +402,8 @@ void HBFManager::free_all_nodes() {
         arena_.free(ptr);
     }
     tracked_allocations_.clear();
+    d_root_basis_ = nullptr;
+    root_basis_size_ = 0;
 }
 
 } // namespace gpu

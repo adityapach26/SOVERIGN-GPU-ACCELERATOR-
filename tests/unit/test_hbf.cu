@@ -300,4 +300,9 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
 
     manager.free_all_nodes();
     REQUIRE(arena.occupancy_percentage() == 0);
+
+    // 3. Test safety after free_all_nodes
+    manager.set_root_basis({1, 0, 2, 3, 4});
+    manager.free_all_nodes();
+    REQUIRE(arena.occupancy_percentage() == 0);
 }

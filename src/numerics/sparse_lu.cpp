@@ -293,7 +293,7 @@ void SparseLUFactorization::ftran(std::vector<Float>& rhs) {
             w[static_cast<std::size_t>(i)];
     }
 
-    // Apply incremental Forrest-Tomlin / Eta updates (E_1^{-1} ... E_k^{-1} * rhs)
+    // Apply incremental Forrest-Tomlin / Eta updates (E_k^{-1} ... E_1^{-1} * rhs)
     for (const auto& ft : ft_updates_) {
         Index p = ft.leaving_row;
         Float x_p = rhs[static_cast<std::size_t>(p)];
@@ -315,7 +315,7 @@ void SparseLUFactorization::btran(std::vector<Float>& rhs) {
         throw std::runtime_error("SparseLUFactorization::btran: not factorized");
     }
 
-    // Apply incremental Forrest-Tomlin / Eta updates transposed (E_k^{-T} ... E_1^{-T} * rhs)
+    // Apply incremental Forrest-Tomlin / Eta updates transposed (E_1^{-T} ... E_k^{-T} * rhs)
     for (auto it = ft_updates_.rbegin(); it != ft_updates_.rend(); ++it) {
         const auto& ft = *it;
         Index p = ft.leaving_row;
@@ -397,7 +397,7 @@ void SparseLUFactorization::update(
     ft.leaving_row = leaving_row;
     ft.entering_col = entering_col;
 
-    // Eta vector \eta = E^{-1} e_p
+    // Eta vector \eta for the inverse transformation E^{-1}
     // \eta_p = 1 / d_p
     // \eta_i = -d_i / d_p  for i != p
     for (Index i = 0; i < m_; ++i) {

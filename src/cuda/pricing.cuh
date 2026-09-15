@@ -16,8 +16,8 @@ namespace cuda {
  * @param d_block_indices Global memory array for block-level best indices (length: blocks).
  * @param d_global_score  Global memory output for final maximum score (length: 1).
  * @param d_global_index  Global memory output for final best index (length: 1).
- * @param blocks          Number of blocks for the first pass.
- * @param threads         Number of threads per block for the first pass.
+ * @param blocks          Number of blocks.
+ * @param threads         Number of threads per block.
  */
 void launch_devex_pricing(
     const Float* d_reduced_costs,

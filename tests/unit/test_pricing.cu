@@ -8,7 +8,7 @@
 
 using namespace sankhya;
 
-TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Hardened)", "[cuda][pricing]") {
+TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Source Fidelity)", "[cuda][pricing]") {
     Index n = 1024; // Use large enough for multiple blocks
     
     std::vector<Float> h_rc(n, 0.0);
@@ -19,25 +19,23 @@ TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Hardened)", "[cuda][
     h_rc[42] = 10.0;
     h_weight[42] = 2.0; // score = 100 / 2 = 50.0
     
-    // TEST 2 — DETERMINISTIC TIE (CROSS-BLOCK)
-    // block A (threads 0-127, covers index 42) has score 50 at index 42.
-    // block B (threads 128-255, covers index 150) will have identical score 50.
+    // TEST 2 — EXACT EQUAL-SCORE TIE
+    h_rc[105] = 10.0;
+    h_weight[105] = 2.0; // score = 50.0
+    
+    // TEST 3 — CROSS-BLOCK EQUAL-SCORE TIE
+    // Block boundaries depend on threads per block.
+    // We use threads=128. So block 0 handles 0-127 (includes 42).
+    // Block 1 handles 128-255 (includes 150).
     h_rc[150] = 10.0;
     h_weight[150] = 2.0; // score = 50.0
     
-    // TEST 3 — PRECISION SENSITIVITY
-    // Float (double) precision test. 
-    // Float cast loses 29 bits. We create a score that differs ONLY in the lower bits of double precision.
+    // TEST 4 — PRECISION SENSITIVITY
     // Score at 42: 50.0
-    // Let's set index 8 (which is smaller than 42, so it WOULD win if scores were equal).
+    // Let's set index 8 (which is smaller than 42, so it WOULD win if scores were exactly equal).
     // Make its score just SLIGHTLY smaller than 50.0 in double precision, but identical in float precision.
-    // 50.0 in binary is 110010.
-    // Float precision has 24 bits. Double has 53.
-    // 50.0 * (1 - 1e-12) will be identical in float, but smaller in double.
     h_rc[8] = std::sqrt(50.0 * (1.0 - 1e-12));
     h_weight[8] = 1.0; 
-    // If precision is lost (cast to float), score[8] == score[42], and 8 < 42, so 8 wins.
-    // With strict double precision, score[8] < score[42], so 42 wins.
     
     Float* d_rc;
     Float* d_weight;
@@ -63,6 +61,11 @@ TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Hardened)", "[cuda][
     cudaMemcpy(d_weight, h_weight.data(), n * sizeof(Float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_eligible, h_eligible.data(), n * sizeof(bool), cudaMemcpyHostToDevice);
     
+    unsigned long long int zero = 0;
+    Index max_idx = 0x7FFFFFFF;
+    cudaMemcpy(d_global_score, &zero, sizeof(unsigned long long int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_global_index, &max_idx, sizeof(Index), cudaMemcpyHostToDevice);
+    
     cuda::launch_devex_pricing(d_rc, d_weight, d_eligible, n, 
                                d_block_scores, d_block_indices, 
                                d_global_score, d_global_index, 
@@ -75,9 +78,8 @@ TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Hardened)", "[cuda][
     cudaMemcpy(&final_score, d_global_score, sizeof(Float), cudaMemcpyDeviceToHost);
     cudaMemcpy(&final_index, d_global_index, sizeof(Index), cudaMemcpyDeviceToHost);
     
-    // We expect index 42.
-    // It beats 150 by index tie-breaker (42 < 150, score 50 == 50).
-    // It beats 8 by strict double precision score (50.0 > 50.0 - epsilon).
+    // We expect index 42 to win against 105 and 150 because it has the exact same max score (50.0) but lowest index.
+    // We expect index 42 to win against 8 because index 8 has a slightly strictly lower double-precision score.
     REQUIRE(final_score == 50.0);
     REQUIRE(final_index == 42);
     

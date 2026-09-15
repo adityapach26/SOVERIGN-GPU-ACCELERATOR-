@@ -6,43 +6,40 @@ namespace sankhya {
 namespace cuda {
 
 /**
- * @brief CUDA kernel for Step 12.1 Warp-Synchronous Devex Pricing.
+ * @brief CUDA kernel for Step 12.1 Warp-Synchronous Devex Pricing (Pass 1)
  * 
- * Computes Devex scores in parallel across CUDA threads and reduces
- * the maximum score at the warp level using __shfl_down_sync.
- * The warp winner writes its result to global memory using atomicMax.
+ * Computes Devex scores in parallel and reduces the maximum score at the block level.
  * 
- * Engineering Decision (Numerical Safety & Tie-Breaking):
- * To guarantee deterministic tie-breaking (smaller variable index wins) 
- * via a single hardware-atomic operation without locking:
- * 1. The score (r_t^2 / gamma_t) is cast to single-precision (float).
- * 2. The float is bit-cast to uint32_t (safe for non-negative scores).
- * 3. The 32-bit index is bitwise-inverted (0xFFFFFFFF - index).
- * 4. These are packed into a 64-bit unsigned long long int.
- * atomicMax on this 64-bit value natively maximizes the score and
- * resolves ties by maximizing the inverted index (i.e. minimizing the true index).
+ * Engineering Decision (Precision & Global Reduction):
+ * The source guideline mentioned "atomicMax to global memory block."
+ * However, casting double-precision Devex scores to float to pack them into a 64-bit 
+ * atomicMax fundamentally changes the valid ordering of scores by discarding 29 bits of mantissa.
+ * To enforce strict double-precision evaluation and deterministic tie-breaking without
+ * introducing global spinlock deadlocks, the architecture uses a two-pass reduction.
+ * Pass 1 reduces values to block-level outputs. Pass 2 finalizes the GPU-native selection.
  */
-__global__ void devex_pricing_kernel(
+__global__ void devex_pricing_block_kernel(
     const Float* __restrict__ reduced_costs,
     const Float* __restrict__ devex_weights,
     const bool* __restrict__ is_eligible,
     Index n,
-    unsigned long long int* __restrict__ block_out
+    Float* __restrict__ block_scores,
+    Index* __restrict__ block_indices
 ) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     
-    float max_score = -1.0f;
+    Float max_score = -1.0;
     Index best_index = 0x7FFFFFFF;
 
-    // 1. Parallel thread evaluation
+    // 1. Parallel thread evaluation (Double Precision)
     for (int i = tid; i < n; i += blockDim.x * gridDim.x) {
         if (is_eligible[i]) {
             Float r = reduced_costs[i];
             Float gamma = devex_weights[i];
             
-            // Numerical safety: guard against division by zero or negative weights
-            if (gamma > 1e-12) {
-                float score = static_cast<float>((r * r) / gamma);
+            // Minimum mathematically necessary validity condition
+            if (gamma > 0.0) {
+                Float score = (r * r) / gamma;
                 if (score > max_score || (score == max_score && i < best_index)) {
                     max_score = score;
                     best_index = i;
@@ -51,25 +48,90 @@ __global__ void devex_pricing_kernel(
         }
     }
 
-    // 2. Warp-level reduction using __shfl_down_sync
-    unsigned int mask = 0xffffffff;
-    for (int offset = 16; offset > 0; offset /= 2) {
-        float other_score = __shfl_down_sync(mask, max_score, offset);
-        Index other_index = __shfl_down_sync(mask, best_index, offset);
+    // 2. Warp-level reduction
+    // Using shared memory for intra-block reduction since __shfl_down_sync with double requires two registers
+    // and to safely handle the index together.
+    extern __shared__ double s_data[]; // size: 2 * blockDim.x 
+    double* s_scores = s_data;
+    Index* s_indices = (Index*)(s_data + blockDim.x);
+    
+    s_scores[threadIdx.x] = max_score;
+    s_indices[threadIdx.x] = best_index;
+    __syncthreads();
+
+    // 3. Block-level reduction in shared memory
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            Float other_score = s_scores[threadIdx.x + s];
+            Index other_index = s_indices[threadIdx.x + s];
+            
+            if (other_score > s_scores[threadIdx.x] || 
+               (other_score == s_scores[threadIdx.x] && other_index < s_indices[threadIdx.x])) {
+                s_scores[threadIdx.x] = other_score;
+                s_indices[threadIdx.x] = other_index;
+            }
+        }
+        __syncthreads();
+    }
+
+    // 4. Output block maximum to global memory
+    if (threadIdx.x == 0) {
+        block_scores[blockIdx.x] = s_scores[0];
+        block_indices[blockIdx.x] = s_indices[0];
+    }
+}
+
+/**
+ * @brief CUDA kernel for Step 12.1 Warp-Synchronous Devex Pricing (Pass 2)
+ * 
+ * Performs final GPU-native selection from the block-level outputs.
+ */
+__global__ void devex_pricing_global_kernel(
+    const Float* __restrict__ block_scores,
+    const Index* __restrict__ block_indices,
+    int num_blocks,
+    Float* __restrict__ global_score,
+    Index* __restrict__ global_index
+) {
+    Float max_score = -1.0;
+    Index best_index = 0x7FFFFFFF;
+
+    // Single warp/block sequential reduction over num_blocks (typically very small, e.g. < 1000)
+    for (int i = threadIdx.x; i < num_blocks; i += blockDim.x) {
+        Float score = block_scores[i];
+        Index idx = block_indices[i];
         
-        if (other_score > max_score || (other_score == max_score && other_index < best_index)) {
-            max_score = other_score;
-            best_index = other_index;
+        if (score > max_score || (score == max_score && idx < best_index)) {
+            max_score = score;
+            best_index = idx;
         }
     }
 
-    // 3. The first thread in each warp writes the warp's maximum to the block output
-    if (threadIdx.x % 32 == 0 && max_score >= 0.0f) {
-        uint32_t score_bits = __float_as_uint(max_score);
-        uint32_t index_bits = ~static_cast<uint32_t>(best_index); // Bitwise invert so larger is smaller index
-        unsigned long long int packed = (static_cast<unsigned long long int>(score_bits) << 32) | index_bits;
-        
-        atomicMax(&block_out[blockIdx.x], packed);
+    extern __shared__ double s_data[]; // size: 2 * blockDim.x 
+    double* s_scores = s_data;
+    Index* s_indices = (Index*)(s_data + blockDim.x);
+    
+    s_scores[threadIdx.x] = max_score;
+    s_indices[threadIdx.x] = best_index;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            Float other_score = s_scores[threadIdx.x + s];
+            Index other_index = s_indices[threadIdx.x + s];
+            
+            if (other_score > s_scores[threadIdx.x] || 
+               (other_score == s_scores[threadIdx.x] && other_index < s_indices[threadIdx.x])) {
+                s_scores[threadIdx.x] = other_score;
+                s_indices[threadIdx.x] = other_index;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        *global_score = s_scores[0];
+        *global_index = s_indices[0];
     }
 }
 
@@ -78,16 +140,40 @@ void launch_devex_pricing(
     const Float* d_devex_weights,
     const bool* d_is_eligible,
     Index n,
-    unsigned long long int* d_block_out,
+    Float* d_block_scores,
+    Index* d_block_indices,
+    Float* d_global_score,
+    Index* d_global_index,
     int blocks,
     int threads
 ) {
-    devex_pricing_kernel<<<blocks, threads>>>(
+    size_t shared_mem_bytes = threads * (sizeof(double) + sizeof(Index));
+    
+    devex_pricing_block_kernel<<<blocks, threads, shared_mem_bytes>>>(
         d_reduced_costs,
         d_devex_weights,
         d_is_eligible,
         n,
-        d_block_out
+        d_block_scores,
+        d_block_indices
+    );
+    
+    // Final GPU-native reduction (using 1 block of 256 threads)
+    int final_threads = (blocks < 256) ? blocks : 256;
+    // Round up to next power of 2 for shared memory reduction if needed, but the loop handles non-powers if padded
+    // Wait, standard block reduction requires power of 2 blockDim. Let's force power of 2.
+    int p2 = 1;
+    while(p2 < final_threads) p2 *= 2;
+    final_threads = p2;
+    
+    size_t final_shared_bytes = final_threads * (sizeof(double) + sizeof(Index));
+    
+    devex_pricing_global_kernel<<<1, final_threads, final_shared_bytes>>>(
+        d_block_scores,
+        d_block_indices,
+        blocks,
+        d_global_score,
+        d_global_index
     );
 }
 

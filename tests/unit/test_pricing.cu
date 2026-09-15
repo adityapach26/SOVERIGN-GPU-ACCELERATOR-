@@ -4,75 +4,88 @@
 #include <vector>
 #include <iostream>
 #include <cstring>
+#include <cmath>
 
 using namespace sankhya;
 
-TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel", "[cuda][pricing]") {
-    Index n = 128; // Using enough for multiple warps
+TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Hardened)", "[cuda][pricing]") {
+    Index n = 1024; // Use large enough for multiple blocks
     
     std::vector<Float> h_rc(n, 0.0);
     std::vector<Float> h_weight(n, 1.0);
     std::vector<bool> h_eligible(n, true);
     
     // TEST 1 — BASIC MAXIMUM
-    // Set a known unique maximum score
     h_rc[42] = 10.0;
-    h_weight[42] = 2.0; // score = 100 / 2 = 50
+    h_weight[42] = 2.0; // score = 100 / 2 = 50.0
     
-    // TEST 2 — DETERMINISTIC TIE
-    // Set another variable with exactly the SAME maximum score but higher index
-    h_rc[105] = 10.0;
-    h_weight[105] = 2.0; // score = 50
+    // TEST 2 — DETERMINISTIC TIE (CROSS-BLOCK)
+    // block A (threads 0-127, covers index 42) has score 50 at index 42.
+    // block B (threads 128-255, covers index 150) will have identical score 50.
+    h_rc[150] = 10.0;
+    h_weight[150] = 2.0; // score = 50.0
     
-    // And one with the same score but even higher index
-    h_rc[77] = 5.0; // score = 25
+    // TEST 3 — PRECISION SENSITIVITY
+    // Float (double) precision test. 
+    // Float cast loses 29 bits. We create a score that differs ONLY in the lower bits of double precision.
+    // Score at 42: 50.0
+    // Let's set index 8 (which is smaller than 42, so it WOULD win if scores were equal).
+    // Make its score just SLIGHTLY smaller than 50.0 in double precision, but identical in float precision.
+    // 50.0 in binary is 110010.
+    // Float precision has 24 bits. Double has 53.
+    // 50.0 * (1 - 1e-12) will be identical in float, but smaller in double.
+    h_rc[8] = std::sqrt(50.0 * (1.0 - 1e-12));
+    h_weight[8] = 1.0; 
+    // If precision is lost (cast to float), score[8] == score[42], and 8 < 42, so 8 wins.
+    // With strict double precision, score[8] < score[42], so 42 wins.
     
     Float* d_rc;
     Float* d_weight;
     bool* d_eligible;
-    unsigned long long int* d_block_out;
     
-    int blocks = 2; // TEST 3 — CROSS-WARP / PARALLEL COVERAGE
+    int threads = 128;
+    int blocks = (n + threads - 1) / threads;
+    
+    Float* d_block_scores;
+    Index* d_block_indices;
+    Float* d_global_score;
+    Index* d_global_index;
     
     cudaMalloc(&d_rc, n * sizeof(Float));
     cudaMalloc(&d_weight, n * sizeof(Float));
     cudaMalloc(&d_eligible, n * sizeof(bool));
-    cudaMalloc(&d_block_out, blocks * sizeof(unsigned long long int));
+    cudaMalloc(&d_block_scores, blocks * sizeof(Float));
+    cudaMalloc(&d_block_indices, blocks * sizeof(Index));
+    cudaMalloc(&d_global_score, sizeof(Float));
+    cudaMalloc(&d_global_index, sizeof(Index));
     
     cudaMemcpy(d_rc, h_rc.data(), n * sizeof(Float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_weight, h_weight.data(), n * sizeof(Float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_eligible, h_eligible.data(), n * sizeof(bool), cudaMemcpyHostToDevice);
-    cudaMemset(d_block_out, 0, blocks * sizeof(unsigned long long int));
     
-    int threads = 64; // 2 warps per block
-    
-    cuda::launch_devex_pricing(d_rc, d_weight, d_eligible, n, d_block_out, blocks, threads);
+    cuda::launch_devex_pricing(d_rc, d_weight, d_eligible, n, 
+                               d_block_scores, d_block_indices, 
+                               d_global_score, d_global_index, 
+                               blocks, threads);
     cudaDeviceSynchronize();
     
-    std::vector<unsigned long long int> h_block_out(blocks);
-    cudaMemcpy(h_block_out.data(), d_block_out, blocks * sizeof(unsigned long long int), cudaMemcpyDeviceToHost);
+    Float final_score = 0.0;
+    Index final_index = 0;
     
-    // The maximum should be aggregated from block outputs
-    unsigned long long int global_max_packed = 0;
-    for (int i = 0; i < blocks; ++i) {
-        if (h_block_out[i] > global_max_packed) {
-            global_max_packed = h_block_out[i];
-        }
-    }
+    cudaMemcpy(&final_score, d_global_score, sizeof(Float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&final_index, d_global_index, sizeof(Index), cudaMemcpyDeviceToHost);
     
-    uint32_t best_index_inverted = static_cast<uint32_t>(global_max_packed & 0xFFFFFFFF);
-    Index best_index = ~best_index_inverted;
-    
-    uint32_t score_bits = static_cast<uint32_t>(global_max_packed >> 32);
-    float best_score;
-    memcpy(&best_score, &score_bits, sizeof(float));
-    
-    // We expect index 42 because it ties with 105 but is lower
-    REQUIRE(best_score == 50.0f);
-    REQUIRE(best_index == 42);
+    // We expect index 42.
+    // It beats 150 by index tie-breaker (42 < 150, score 50 == 50).
+    // It beats 8 by strict double precision score (50.0 > 50.0 - epsilon).
+    REQUIRE(final_score == 50.0);
+    REQUIRE(final_index == 42);
     
     cudaFree(d_rc);
     cudaFree(d_weight);
     cudaFree(d_eligible);
-    cudaFree(d_block_out);
+    cudaFree(d_block_scores);
+    cudaFree(d_block_indices);
+    cudaFree(d_global_score);
+    cudaFree(d_global_index);
 }

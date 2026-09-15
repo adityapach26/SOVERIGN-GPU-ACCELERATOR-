@@ -24,6 +24,23 @@ HBFManager::HBFManager(VRAMArena& arena) : arena_(arena) {
     tracked_allocations_.push_back(d_node_registry_);
 }
 
+void HBFManager::set_root_basis(const std::vector<Index>& host_root_basis) {
+    if (host_root_basis.empty()) return;
+    
+    // Only allocate if we haven't already or if size changed
+    if (d_root_basis_ == nullptr || root_basis_size_ != static_cast<Index>(host_root_basis.size())) {
+        std::size_t bytes = host_root_basis.size() * sizeof(Index);
+        d_root_basis_ = static_cast<Index*>(arena_.allocate(bytes));
+        tracked_allocations_.push_back(d_root_basis_);
+        root_basis_size_ = static_cast<Index>(host_root_basis.size());
+    }
+    
+    check_cuda_error(
+        cudaMemcpy(d_root_basis_, host_root_basis.data(), host_root_basis.size() * sizeof(Index), cudaMemcpyHostToDevice),
+        "Failed to copy root basis to device"
+    );
+}
+
 HBFManager::~HBFManager() {
     free_all_nodes();
 }
@@ -175,6 +192,7 @@ __global__ void inherit_basis_kernel(
     const HBFNode* node_registry,
     const Float* orig_lb,
     const Float* orig_ub,
+    const Index* orig_basis,
     WorkingBasisState ws
 ) {
     __shared__ uint32_t path[MAX_HBF_DEPTH];
@@ -190,6 +208,12 @@ __global__ void inherit_basis_kernel(
     for (Index i = threadIdx.x; i < ws.num_cols; i += blockDim.x) {
         ws.lb[i] = orig_lb[i];
         ws.ub[i] = orig_ub[i];
+    }
+    // Initialize working basis from immutable root basis
+    if (orig_basis != nullptr) {
+        for (Index i = threadIdx.x; i < ws.m; i += blockDim.x) {
+            ws.basis_indices[i] = orig_basis[i];
+        }
     }
     __syncthreads();
 
@@ -336,7 +360,8 @@ void HBFManager::inherit_basis(uint32_t child_id, const DeviceModel& device_mode
         child_id, 
         d_node_registry_, 
         device_model.lb, 
-        device_model.ub, 
+        device_model.ub,
+        d_root_basis_, 
         state
     );
     

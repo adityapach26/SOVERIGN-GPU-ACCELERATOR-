@@ -181,11 +181,25 @@ public:
      */
     void free_all_nodes();
 
+    /**
+     * @brief Sets the immutable root basis from which all nodes inherit.
+     * 
+     * Engineering Decision: Rather than duplicating the full basis in every node 
+     * or polluting the immutable DeviceModel (which represents the problem, not the solve state),
+     * the HBFManager holds the single global root basis in device memory.
+     * Working states initialize their basis from this array before applying FT updates.
+     */
+    void set_root_basis(const std::vector<Index>& host_root_basis);
+
 private:
     VRAMArena& arena_;
     
     // Array of nodes resident in VRAM for direct device traversal
     HBFNode* d_node_registry_;
+
+    // Root basis for inheritance
+    Index* d_root_basis_ = nullptr;
+    Index root_basis_size_ = 0;
 
     // Engineering Decision: Track device pointer allocations yielded by the arena
     // so they can be explicitly relinquished back to the arena during destruction.

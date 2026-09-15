@@ -106,8 +106,8 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
 
     simplex::Basis basis;
     basis.col_status.resize(10, simplex::BasisStatus::AtLower);
-    for(Index i=0; i<5; ++i) basis.col_status[i] = simplex::BasisStatus::Basic;
-    basis.basic_indices = {0, 1, 2, 3, 4};
+    basis.basic_indices = {1, 0, 2, 3, 4};
+    for(Index idx : basis.basic_indices) basis.col_status[idx] = simplex::BasisStatus::Basic;
 
     // Factorize base
     numerics::SparseLUFactorization lu_base;
@@ -124,6 +124,7 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     cudaMemcpy(d_model.ub, h_orig_ub.data(), num_cols * sizeof(Float), cudaMemcpyHostToDevice);
 
     gpu::HBFManager manager(arena);
+    manager.set_root_basis({1, 0, 2, 3, 4});
 
     // Pivot 1 (Root node 10): replace col 0 with col 5
     Index entering_col_1 = 5;
@@ -142,8 +143,8 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     for (Index i = 0; i < m; ++i) {
         Float val = (i == leaving_row_1) ? (1.0 / d_p1) : (-d_1[i] / d_p1);
         if (std::abs(val) > 1e-15) {
-            ft1.eta_rows.push_back(i);
-            ft1.eta_vals.push_back(val);
+            ft1.eta_indices.push_back(i);
+            ft1.eta_values.push_back(val);
         }
     }
     fts_1.push_back(ft1);
@@ -172,8 +173,8 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     for (Index i = 0; i < m; ++i) {
         Float val = (i == leaving_row_2) ? (1.0 / d_p2) : (-d_2[i] / d_p2);
         if (std::abs(val) > 1e-15) {
-            ft2.eta_rows.push_back(i);
-            ft2.eta_vals.push_back(val);
+            ft2.eta_indices.push_back(i);
+            ft2.eta_values.push_back(val);
         }
     }
     fts_2.push_back(ft2);
@@ -184,6 +185,36 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     basis.basic_indices[leaving_row_2] = entering_col_2;
     numerics::SparseLUFactorization lu_2;
     lu_2.factorize(A, basis);
+
+    // Pivot 3 (Child node 12): replace col 2 with col 7
+    Index entering_col_3 = 7;
+    Index leaving_row_3 = 2;
+    std::vector<Float> Aq_3(5, 0.0);
+    for(Index k=A.col_ptrs[entering_col_3]; k<A.col_ptrs[entering_col_3+1]; ++k) Aq_3[A.row_indices[k]] = A.values[k];
+    
+    std::vector<Float> d_3 = Aq_3;
+    lu_2.ftran(d_3); // FTRAN on previous basis
+
+    std::vector<gpu::FTUpdateHost> fts_3;
+    gpu::FTUpdateHost ft3;
+    ft3.leaving_row = leaving_row_3;
+    ft3.entering_col = entering_col_3;
+    Float d_p3 = d_3[leaving_row_3];
+    for (Index i = 0; i < m; ++i) {
+        Float val = (i == leaving_row_3) ? (1.0 / d_p3) : (-d_3[i] / d_p3);
+        if (std::abs(val) > 1e-15) {
+            ft3.eta_indices.push_back(i);
+            ft3.eta_values.push_back(val);
+        }
+    }
+    fts_3.push_back(ft3);
+    
+    std::vector<gpu::BoundDelta> deltas_3 = {{2, 2.0, 8.0}};
+    manager.create_node(12, 11, deltas_3, fts_3);
+    
+    basis.basic_indices[leaving_row_3] = entering_col_3;
+    numerics::SparseLUFactorization lu_3;
+    lu_3.factorize(A, basis);
 
     // ---- Allocate working state ----
     gpu::WorkingBasisState ws = manager.allocate_working_state(m, num_cols, 100, 20);
@@ -198,8 +229,8 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     numerics::SparseLUFactorization lu_base_for_test;
     simplex::Basis base_basis;
     base_basis.col_status.resize(10, simplex::BasisStatus::AtLower);
-    for(Index i=0; i<5; ++i) base_basis.col_status[i] = simplex::BasisStatus::Basic;
-    base_basis.basic_indices = {0, 1, 2, 3, 4};
+    base_basis.basic_indices = {1, 0, 2, 3, 4};
+    for(Index idx : base_basis.basic_indices) base_basis.col_status[idx] = simplex::BasisStatus::Basic;
     lu_base_for_test.factorize(A, base_basis);
     lu_base_for_test.ftran(base_ftran_rhs);
 
@@ -207,14 +238,14 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     cudaMemcpy(ws.work_vec, base_ftran_rhs.data(), m * sizeof(Float), cudaMemcpyHostToDevice);
 
     // ---- Execute GPU-resident inheritance ----
-    manager.inherit_basis(11, d_model, ws);
+    manager.inherit_basis(12, d_model, ws);
 
     // Verify GPU FTRAN result matches FRESH FACTORIZATION FTRAN result
     std::vector<Float> h_result_work(m);
     cudaMemcpy(h_result_work.data(), ws.work_vec, m * sizeof(Float), cudaMemcpyDeviceToHost);
 
     std::vector<Float> fresh_rhs = rhs;
-    lu_2.ftran(fresh_rhs);
+    lu_3.ftran(fresh_rhs);
 
     for (Index i = 0; i < m; ++i) {
         REQUIRE(std::abs(h_result_work[i] - fresh_rhs[i]) < 1e-9);
@@ -223,8 +254,13 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     // Verify basis_indices were updated
     std::vector<Index> h_result_basis(m);
     cudaMemcpy(h_result_basis.data(), ws.basis_indices, m * sizeof(Index), cudaMemcpyDeviceToHost);
-    REQUIRE(h_result_basis[0] == 5); // Node 10
-    REQUIRE(h_result_basis[1] == 6); // Node 11
+    // Updated positions
+    REQUIRE(h_result_basis[0] == 5); // Node 10 (Pivot 1)
+    REQUIRE(h_result_basis[1] == 6); // Node 11 (Pivot 2)
+    REQUIRE(h_result_basis[2] == 7); // Node 12 (Pivot 3)
+    // Unchanged positions (should mirror initial basis {1, 0, 2, 3, 4})
+    REQUIRE(h_result_basis[3] == 3);
+    REQUIRE(h_result_basis[4] == 4);
 
     // Verify cumulative BoundDeltas
     std::vector<Float> h_working_lb(num_cols);
@@ -236,6 +272,21 @@ TEST_CASE("HBF - Actual Forrest-Tomlin Basis Inheritance (Step 11.2)", "[gpu][hb
     REQUIRE(h_working_ub[0] == 95.0);
     REQUIRE(h_working_lb[1] == 10.0);
     REQUIRE(h_working_ub[1] == 90.0);
+    REQUIRE(h_working_lb[2] == 2.0);
+    REQUIRE(h_working_ub[2] == 8.0);
+
+    // Verify original DeviceModel bounds unchanged
+    std::vector<Float> h_pristine_lb(num_cols);
+    cudaMemcpy(h_pristine_lb.data(), d_model.lb, num_cols * sizeof(Float), cudaMemcpyDeviceToHost);
+    REQUIRE(h_pristine_lb[0] == 0.0);
+    REQUIRE(h_pristine_lb[1] == 0.0);
+    REQUIRE(h_pristine_lb[2] == 0.0);
+
+    // ---- Error handling tests ----
+    // Cycle: node 13 -> 14 -> 13
+    manager.create_node(13, 14, {}, {});
+    manager.create_node(14, 13, {}, {});
+    REQUIRE_THROWS_AS(manager.inherit_basis(14, d_model, ws), std::runtime_error);
 
     manager.free_working_state(ws);
     arena.free(d_model.lb);

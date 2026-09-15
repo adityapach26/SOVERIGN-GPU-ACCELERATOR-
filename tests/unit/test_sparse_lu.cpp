@@ -148,6 +148,7 @@ TEST_CASE("SparseLU - Forrest-Tomlin single update", "[sparse_lu]") {
     // FT update: replace basis col 0 with A col 2
     std::vector<Float> Aq = {2.0, 1.0};
     lu_ft.update(0, 2, Aq);
+    REQUIRE(lu_ft.get_num_ft_updates() == 1u);
 
     // Fresh factorize for reference
     Basis basis_fresh = basis;
@@ -212,6 +213,7 @@ TEST_CASE("SparseLU - Forrest-Tomlin 5 successive updates", "[sparse_lu]") {
         for(Index k=start; k<end; ++k) Aq[A.row_indices[k]] = A.values[k];
         
         lu_ft.update(leaving_row, entering_col, Aq);
+        REQUIRE(lu_ft.get_num_ft_updates() == static_cast<std::size_t>(step + 1));
         
         basis.basic_indices[leaving_row] = entering_col;
         lu_fresh.factorize(A, basis);

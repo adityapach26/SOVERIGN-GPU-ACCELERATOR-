@@ -16,6 +16,7 @@ void SparseLUFactorization::factorize(
 
     A_ptr_ = &A;
     basis_copy_ = basis;
+    ft_updates_.clear();
 
     if (mm == 0) {
         factorized_ = true;
@@ -291,12 +292,43 @@ void SparseLUFactorization::ftran(std::vector<Float>& rhs) {
         rhs[static_cast<std::size_t>(perm_col_[static_cast<std::size_t>(i)])] =
             w[static_cast<std::size_t>(i)];
     }
+
+    // Apply incremental Forrest-Tomlin / Eta updates (E_1^{-1} ... E_k^{-1} * rhs)
+    for (const auto& ft : ft_updates_) {
+        Index p = ft.leaving_row;
+        Float x_p = rhs[static_cast<std::size_t>(p)];
+        
+        for (std::size_t j = 0; j < ft.eta_rows.size(); ++j) {
+            Index row = ft.eta_rows[j];
+            Float val = ft.eta_vals[j];
+            if (row == p) {
+                rhs[static_cast<std::size_t>(row)] = val * x_p;
+            } else {
+                rhs[static_cast<std::size_t>(row)] += val * x_p;
+            }
+        }
+    }
 }
 
 void SparseLUFactorization::btran(std::vector<Float>& rhs) {
     if (!factorized_) {
         throw std::runtime_error("SparseLUFactorization::btran: not factorized");
     }
+
+    // Apply incremental Forrest-Tomlin / Eta updates transposed (E_k^{-T} ... E_1^{-T} * rhs)
+    for (auto it = ft_updates_.rbegin(); it != ft_updates_.rend(); ++it) {
+        const auto& ft = *it;
+        Index p = ft.leaving_row;
+        
+        Float dot = 0.0;
+        for (std::size_t j = 0; j < ft.eta_rows.size(); ++j) {
+            Index row = ft.eta_rows[j];
+            Float val = ft.eta_vals[j];
+            dot += val * rhs[static_cast<std::size_t>(row)];
+        }
+        rhs[static_cast<std::size_t>(p)] = dot;
+    }
+
     const auto mm = static_cast<std::size_t>(m_);
     std::vector<Float> w(mm);
 
@@ -339,13 +371,48 @@ void SparseLUFactorization::btran(std::vector<Float>& rhs) {
 void SparseLUFactorization::update(
     Index leaving_row,
     Index entering_col,
-    const std::vector<Float>& /*Aq*/
+    const std::vector<Float>& Aq
 ) {
-    if (A_ptr_ == nullptr) {
+    if (A_ptr_ == nullptr || !factorized_) {
         throw std::runtime_error("SparseLUFactorization::update: no prior factorize() call");
     }
+
+    // 1. Construct the transformed entering column in factorized coordinates
+    // We need d = B_{current}^{-1} A_q.
+    std::vector<Float> d = Aq;
+    ftran(d);
+
+    Float d_p = d[static_cast<std::size_t>(leaving_row)];
+    
+    // Engineering decision: numerical pivot tolerance
+    if (std::abs(d_p) < 1e-9) { 
+        // Numerical instability, force refactorization
+        basis_copy_.basic_indices[static_cast<std::size_t>(leaving_row)] = entering_col;
+        factorize(*A_ptr_, basis_copy_);
+        return;
+    }
+
+    // 2. Derive the Product-Form / Forrest-Tomlin update transformation (Eta vector)
+    FTUpdate ft;
+    ft.leaving_row = leaving_row;
+    ft.entering_col = entering_col;
+
+    // Eta vector \eta = E^{-1} e_p
+    // \eta_p = 1 / d_p
+    // \eta_i = -d_i / d_p  for i != p
+    for (Index i = 0; i < m_; ++i) {
+        Float val = (i == leaving_row) ? (1.0 / d_p) : (-d[static_cast<std::size_t>(i)] / d_p);
+        if (std::abs(val) > 1e-15) {
+            ft.eta_rows.push_back(i);
+            ft.eta_vals.push_back(val);
+        }
+    }
+
+    // 3. Update the maintained factor representation incrementally
+    ft_updates_.push_back(std::move(ft));
+
+    // 4. Update the cached basis to maintain structural consistency
     basis_copy_.basic_indices[static_cast<std::size_t>(leaving_row)] = entering_col;
-    factorize(*A_ptr_, basis_copy_);
 }
 
 bool SparseLUFactorization::needs_refactorization(
@@ -381,7 +448,7 @@ bool SparseLUFactorization::needs_refactorization(
     }
     
     // Engineering decision: default residual tolerance for refactorization
-    return max_res > 1e-6;
+    return max_res > sankhya::math::kDefaultFeasibilityTol;
 }
 
 } // namespace numerics

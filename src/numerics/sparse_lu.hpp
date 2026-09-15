@@ -64,8 +64,8 @@ public:
     /**
      * @brief Update the basis factorization after a basis change
      *
-     * Step 6.1 placeholder — performs full refactorization.
-     * Forrest-Tomlin updates are deferred to a later step.
+     * Mathematically applies an incremental Forrest-Tomlin / Product-Form
+     * eta-vector update to the factorized state.
      *
      * @param leaving_row  the row index of the leaving variable
      * @param entering_col the column index of the entering variable
@@ -108,12 +108,24 @@ private:
     const core::CSCMatrix* A_ptr_ = nullptr;
     simplex::Basis basis_copy_;
 
-    // Forrest-Tomlin update tracking
+    // Forrest-Tomlin / Product-Form Eta Update tracking
+    // Represents the elementary matrix E = I + (eta - e_p) * e_p^T
     struct FTUpdate {
-        Index k; // The column index in U that was replaced
-        std::vector<Float> w; // The multipliers w_i for i = k ... m-2
+        Index leaving_row;
+        Index entering_col;
+        std::vector<Float> eta_vals;
+        std::vector<Index> eta_rows;
     };
-    std::vector<FTUpdate> ft_updates_; // Sequence of eta-like row transformations
+    std::vector<FTUpdate> ft_updates_; // Sequence of elementary column transformations
+
+public:
+    /**
+     * @brief Number of incremental FT updates currently maintained.
+     */
+    std::size_t get_num_ft_updates() const {
+        return ft_updates_.size();
+    }
+
 };
 
 } // namespace numerics

@@ -72,3 +72,75 @@ TEST_CASE("Phase 14.1: IPM CPU Symbolic Phase and AMD Ordering", "[symbolic][ipm
     REQUIRE(sym.parent[4] == -1);
 }
 
+TEST_CASE("Phase 14.1: IPM CPU Symbolic Fill-in Verification", "[symbolic][ipm][fill]") {
+    // 5x5 Matrix A
+    // Designed so AA^T forms a 4-cycle among nodes 0, 1, 2, 3, and node 4 is isolated.
+    // Cycle: 0-1-2-3-0.
+    core::CSRMatrix A;
+    A.rows = 5;
+    A.cols = 5;
+    
+    // Row 0: cols 0, 3
+    // Row 1: cols 0, 1
+    // Row 2: cols 1, 2
+    // Row 3: cols 2, 3
+    // Row 4: col 4
+    A.row_ptrs = {0, 2, 4, 6, 8, 9};
+    A.col_indices = {0, 3, 0, 1, 1, 2, 2, 3, 4};
+    A.values = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    
+    // 1. Compute AMD Ordering
+    std::vector<Index> P = ipm::compute_amd_ordering(A);
+    
+    // Minimum-degree heuristic trace:
+    // Node 4 has degree 0 -> eliminated first (P[0] = 4).
+    // Nodes 0, 1, 2, 3 all have degree 2. Tie-break (lowest index) -> Node 0 eliminated (P[1] = 0).
+    // Eliminating 0 creates a FILL EDGE between 1 and 3.
+    // Nodes 1, 2, 3 all have degree 2. Tie-break -> Node 1 eliminated (P[2] = 1).
+    // Eliminating 1 (neighbors 2, 3) creates no new fill since 2-3 exists.
+    // Node 2 has degree 1 (neighbor 3). Node 3 has degree 1 (neighbor 2).
+    // Tie-break -> Node 2 eliminated (P[3] = 2).
+    // Node 3 eliminated (P[4] = 3).
+    std::vector<Index> expected_P = {4, 0, 1, 2, 3};
+    REQUIRE(P == expected_P);
+    
+    // Compute symbolic factorization
+    ipm::SymbolicFactorization sym;
+    ipm::compute_symbolic_factorization(A, P, sym);
+    
+    // Verify L_pattern fill-in.
+    // In the permuted graph M (ordered by elimination):
+    // orig 4 -> perm 0
+    // orig 0 -> perm 1
+    // orig 1 -> perm 2
+    // orig 2 -> perm 3
+    // orig 3 -> perm 4
+    // 
+    // Original M strictly lower edges:
+    // (2,1) [orig 1-0], (4,1) [orig 3-0]
+    // (3,2) [orig 2-1]
+    // (4,3) [orig 3-2]
+    // Total original edges = 4.
+    //
+    // The symbolic elimination adds the fill edge (4,2) [orig 3-1].
+    // Total non-zeros in L_pattern = 5.
+    
+    Index nnz_L = sym.L_pattern.row_ptrs[5];
+    REQUIRE(nnz_L == 5);
+    
+    std::vector<Index> expected_row_ptrs = {0, 0, 0, 1, 2, 5};
+    for (Index i = 0; i <= 5; ++i) {
+        REQUIRE(sym.L_pattern.row_ptrs[i] == expected_row_ptrs[i]);
+    }
+    
+    std::vector<Index> expected_col_indices = {1, 2, 1, 2, 3};
+    for (size_t i = 0; i < 5; ++i) {
+        REQUIRE(sym.L_pattern.col_indices[i] == expected_col_indices[i]);
+    }
+    
+    // Verify elimination tree parent array
+    std::vector<Index> expected_parent = {-1, 2, 3, 4, -1};
+    for (size_t i = 0; i < 5; ++i) {
+        REQUIRE(sym.parent[i] == expected_parent[i]);
+    }
+}

@@ -44,5 +44,6 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_device_model.cu
         unit/test_hbf.cu
         unit/test_pricing.cu
+        unit/test_ratio_test.cu
     )
 endif()

@@ -21,5 +21,6 @@ if(SANKHYA_ENABLE_CUDA)
         gpu/device_model.cu
         gpu/hbf.cu
         cuda/pricing.cu
+        cuda/ratio_test.cu
     )
 endif()

@@ -15,7 +15,8 @@ __global__ void dual_simplex_kernel(
     WorkingBasisState ws,
     Float obj_sign,
     Index max_iterations,
-    DeviceSimplexStatus* status_out
+    DeviceSimplexStatus* status_out,
+    Index* iter_count_out
 ) {
     if (blockIdx.x != 0) return;
 
@@ -106,6 +107,7 @@ __global__ void dual_simplex_kernel(
                     for (Index k = col_start; k < col_end; ++k) {
                         r_j -= ws.pi[model.row_indices[k]] * model.values[k];
                     }
+                    // Matches CPU exact numerical safety rule from dual.cpp:91
                     if (r_j < 0.0) r_j = 0.0;
 
                     Float theta_j = r_j / std::abs(d_pi_j);
@@ -199,8 +201,12 @@ __global__ void dual_simplex_kernel(
 
     if (threadIdx.x == 0) {
         *status_out = status_shared;
+        if (iter_count_out != nullptr) {
+            *iter_count_out = iter;
+        }
     }
 }
 
 } // namespace gpu
 } // namespace sankhya
+

@@ -41,8 +41,10 @@ __global__ void dual_simplex_kernel(
     WorkingBasisState ws,
     Float obj_sign,
     Index max_iterations,
-    DeviceSimplexStatus* status_out
+    DeviceSimplexStatus* status_out,
+    Index* iter_count_out
 );
 
 } // namespace gpu
 } // namespace sankhya
+

@@ -123,9 +123,20 @@ public:
     /**
      * @brief Number of incremental FT updates currently maintained.
      */
-    std::size_t get_num_ft_updates() const {
-        return ft_updates_.size();
-    }
+    std::size_t get_num_ft_updates() const { return ft_updates_.size(); }
+
+    Index get_m() const { return m_; }
+    const std::vector<Float>& get_L_vals() const { return L_vals_; }
+    const std::vector<Index>& get_L_rows() const { return L_rows_; }
+    const std::vector<Index>& get_L_col_ptrs() const { return L_col_ptrs_; }
+    const std::vector<Float>& get_U_vals() const { return U_vals_; }
+    const std::vector<Index>& get_U_cols() const { return U_cols_; }
+    const std::vector<Index>& get_U_row_ptrs() const { return U_row_ptrs_; }
+    const std::vector<Index>& get_perm_row() const { return perm_row_; }
+    const std::vector<Index>& get_perm_col() const { return perm_col_; }
+    const std::vector<Index>& get_inv_perm_row() const { return inv_perm_row_; }
+    const std::vector<Index>& get_inv_perm_col() const { return inv_perm_col_; }
+    bool is_factorized() const { return factorized_; }
 
 };
 

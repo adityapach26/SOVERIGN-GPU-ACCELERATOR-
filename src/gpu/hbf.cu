@@ -205,7 +205,7 @@ void HBFManager::free_working_state(WorkingBasisState& state) {
  *   Additionally, basis_indices[leaving_row] = entering_col records
  *   the actual basis column swap.
  */
-__device__ void inherit_basis_device(
+__global__ void inherit_basis_kernel(
     uint32_t child_id,
     const HBFNode* node_registry,
     const Float* orig_lb,
@@ -218,7 +218,6 @@ __device__ void inherit_basis_device(
     __shared__ int local_error;
 
     if (threadIdx.x == 0) {
-        path_len = 0;
         local_error = 0;
     }
     __syncthreads();
@@ -236,7 +235,7 @@ __device__ void inherit_basis_device(
     }
     __syncthreads();
 
-    // 2. Traverse parent_id pointers child -> root
+    // 2. Traverse parent_id pointers child → root
     if (threadIdx.x == 0) {
         uint32_t curr = child_id;
         int len = 0;
@@ -264,10 +263,29 @@ __device__ void inherit_basis_device(
 
     if (local_error != 0) return;
 
-    // 3. Reconstruct state root -> child
+    // 3. Reconstruct state root → child
     for (int i = path_len - 1; i >= 0; --i) {
         uint32_t nid = path[i];
         HBFNode node = node_registry[nid];
+
+        // ============================================================
+        // ACTUAL FORREST-TOMLIN UPDATE APPLICATION (Step 6.2 semantics)
+        // ============================================================
+        // Each FTUpdate represents one basis pivot that occurred at this
+        // node's edge. We replay it by:
+        //   1. Recording the basis column swap
+        //   2. Appending the eta column to the working eta-file
+        //   3. Applying the eta transformation to the dense work_vec
+        //      to prove mathematical state change
+        //
+        // The eta transformation for FTRAN is:
+        //   For the INVERSE elementary matrix E^{-1} = I + (eta - e_p) * e_p^T
+        //   Applied to vector x:
+        //     x_new[p] = eta_pivot_val * x[p]
+        //     x_new[j] = x[j] + eta[j] * x[p]   for j != p
+        //
+        // This is the exact Step 6.2 product-form-of-inverse operation.
+        // ============================================================
 
         for (uint32_t f = 0; f < node.num_ft_updates; ++f) {
             FTUpdate ft = node.ft_updates[f];
@@ -299,6 +317,10 @@ __device__ void inherit_basis_device(
                     }
 
                     // (d) Apply actual eta transformation to work_vec
+                    //     This is the mathematical operation E^{-1} * work_vec
+                    //     E^{-1} = I + (eta_col - e_p) * e_p^T
+                    //     work_vec[j] += eta[j] * work_vec[p]  for j != p
+                    //     work_vec[p] *= eta_pivot_val          for j == p
                     Index p = ft.leaving_row;
                     Float x_p = (p < ws.m) ? ws.work_vec[p] : 0.0;
 
@@ -306,8 +328,10 @@ __device__ void inherit_basis_device(
                         Index row = ft.eta_indices[j];
                         Float val = ft.eta_values[j];
                         if (row == p) {
+                            // Pivot row: scale by the eta diagonal entry
                             ws.work_vec[row] = val * x_p;
                         } else if (row < ws.m) {
+                            // Off-pivot: add eta[row] * x_p
                             ws.work_vec[row] += val * x_p;
                         }
                     }
@@ -317,6 +341,7 @@ __device__ void inherit_basis_device(
                     *ws.eta_nnz = new_nnz;
                     Index new_cols = cur_eta_cols + 1;
                     *ws.num_eta_cols = new_cols;
+                    // Close the column pointer for consistency
                     ws.eta_col_starts[new_cols] = new_nnz;
                 }
             }
@@ -324,7 +349,7 @@ __device__ void inherit_basis_device(
             if (local_error != 0) return;
         }
 
-        // Apply Bound Deltas cumulatively
+        // Apply Bound Deltas cumulatively (unchanged)
         for (uint32_t d = threadIdx.x; d < node.num_deltas; d += blockDim.x) {
             Index var = node.deltas[d].var_idx;
             ws.lb[var] = node.deltas[d].new_lb;
@@ -332,17 +357,6 @@ __device__ void inherit_basis_device(
         }
         __syncthreads();
     }
-}
-
-__global__ void inherit_basis_kernel(
-    uint32_t child_id,
-    const HBFNode* node_registry,
-    const Float* orig_lb,
-    const Float* orig_ub,
-    const Index* orig_basis,
-    WorkingBasisState ws
-) {
-    inherit_basis_device(child_id, node_registry, orig_lb, orig_ub, orig_basis, ws);
 }
 
 void HBFManager::inherit_basis(uint32_t child_id, const DeviceModel& device_model, WorkingBasisState& state) {

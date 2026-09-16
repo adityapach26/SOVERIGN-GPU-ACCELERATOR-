@@ -183,11 +183,13 @@ public:
 
     /**
      * @brief Sets the immutable root basis from which all nodes inherit.
+     * 
+     * Engineering Decision: Rather than duplicating the full basis in every node 
+     * or polluting the immutable DeviceModel (which represents the problem, not the solve state),
+     * the HBFManager holds the single global root basis in device memory.
+     * Working states initialize their basis from this array before applying FT updates.
      */
     void set_root_basis(const std::vector<Index>& host_root_basis);
-
-    const HBFNode* get_node_registry() const { return d_node_registry_; }
-    const Index* get_root_basis() const { return d_root_basis_; }
 
 private:
     VRAMArena& arena_;
@@ -203,18 +205,6 @@ private:
     // so they can be explicitly relinquished back to the arena during destruction.
     std::vector<void*> tracked_allocations_;
 };
-
-/**
- * @brief Device-callable inheritance function for batched execution.
- */
-__device__ void inherit_basis_device(
-    uint32_t child_id,
-    const HBFNode* node_registry,
-    const Float* orig_lb,
-    const Float* orig_ub,
-    const Index* orig_basis,
-    WorkingBasisState ws
-);
 
 } // namespace gpu
 } // namespace sankhya

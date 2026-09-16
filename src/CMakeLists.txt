@@ -22,6 +22,5 @@ if(SANKHYA_ENABLE_CUDA)
         gpu/hbf.cu
         cuda/pricing.cu
         cuda/ratio_test.cu
-        cuda/batched_dual.cu
     )
 endif()

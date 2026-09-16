@@ -6,20 +6,15 @@
 #include "core/sparse_matrix.hpp"
 #include "simplex/basis.hpp"
 #include <vector>
+#include <stdexcept>
+#include <string>
 
 using namespace sankhya;
 
-// Small kernel to copy one value out of device arrays to prove residency
-__global__ void verify_device_sparse_lu_kernel(
-    gpu::DeviceSparseLU d_lu,
-    Float* out_L_val,
-    Float* out_U_val,
-    Index* out_perm) 
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        if (d_lu.L_nnz > 0) *out_L_val = d_lu.L_vals[0];
-        if (d_lu.U_nnz > 0) *out_U_val = d_lu.U_vals[0];
-        if (d_lu.m > 0) *out_perm = d_lu.perm_row[0];
+// Helper for testing
+static void check_cuda_test_error(cudaError_t err, const char* msg) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(msg) + ": " + cudaGetErrorString(err));
     }
 }
 
@@ -60,39 +55,69 @@ TEST_CASE("Pre-Phase 13.1 Foundation 0 - DeviceSparseLU Representation", "[cuda]
 
     gpu::DeviceSparseLU d_lu = manager.get_device_struct();
 
-    // 4. Verify Representation on Device
+    // 4. Validate Metadata
     REQUIRE(d_lu.m == 4);
-    REQUIRE(d_lu.L_nnz == cpu_lu.get_L_vals().size());
-    REQUIRE(d_lu.U_nnz == cpu_lu.get_U_vals().size());
+    REQUIRE(d_lu.L_nnz == static_cast<Index>(cpu_lu.get_L_vals().size()));
+    REQUIRE(d_lu.U_nnz == static_cast<Index>(cpu_lu.get_U_vals().size()));
 
-    // Allocate host-accessible device memory for verification output
-    Float* d_out_L;
-    Float* d_out_U;
-    Index* d_out_perm;
-    cudaMalloc(&d_out_L, sizeof(Float));
-    cudaMalloc(&d_out_U, sizeof(Float));
-    cudaMalloc(&d_out_perm, sizeof(Index));
+    // 5. Verify Complete Arrays (Test-only device-to-host copy)
+    // [ENGINEERING DECISION] 
+    // We explicitly use cudaMemcpy to copy the entire arrays back to host vectors 
+    // to validate them element-by-element. This avoids raw cudaMalloc/cudaFree 
+    // for temporary test buffers and ensures 100% verification of the device state.
+    // This host round-trip is strictly for testing and does not bypass or pollute 
+    // the production architecture.
+    
+    Index m = cpu_lu.get_m();
+    Index L_nnz = cpu_lu.get_L_vals().size();
+    Index U_nnz = cpu_lu.get_U_vals().size();
 
-    verify_device_sparse_lu_kernel<<<1, 1>>>(d_lu, d_out_L, d_out_U, d_out_perm);
-    cudaDeviceSynchronize();
+    std::vector<Float> h_L_vals(L_nnz), h_U_vals(U_nnz);
+    std::vector<Index> h_L_rows(L_nnz), h_U_cols(U_nnz);
+    std::vector<Index> h_L_col_ptrs(m + 1), h_U_row_ptrs(m + 1);
+    std::vector<Index> h_perm_row(m), h_perm_col(m);
+    std::vector<Index> h_inv_perm_row(m), h_inv_perm_col(m);
 
-    Float h_out_L = 0, h_out_U = 0;
-    Index h_out_perm = 0;
-    cudaMemcpy(&h_out_L, d_out_L, sizeof(Float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_out_U, d_out_U, sizeof(Float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&h_out_perm, d_out_perm, sizeof(Index), cudaMemcpyDeviceToHost);
+    check_cuda_test_error(cudaMemcpy(h_L_vals.data(), d_lu.L_vals, L_nnz * sizeof(Float), cudaMemcpyDeviceToHost), "L_vals");
+    check_cuda_test_error(cudaMemcpy(h_L_rows.data(), d_lu.L_rows, L_nnz * sizeof(Index), cudaMemcpyDeviceToHost), "L_rows");
+    check_cuda_test_error(cudaMemcpy(h_L_col_ptrs.data(), d_lu.L_col_ptrs, (m + 1) * sizeof(Index), cudaMemcpyDeviceToHost), "L_col_ptrs");
 
-    // Verify values match the CPU representation
-    REQUIRE(h_out_L == Catch::Approx(cpu_lu.get_L_vals()[0]));
-    REQUIRE(h_out_U == Catch::Approx(cpu_lu.get_U_vals()[0]));
-    REQUIRE(h_out_perm == cpu_lu.get_perm_row()[0]);
+    check_cuda_test_error(cudaMemcpy(h_U_vals.data(), d_lu.U_vals, U_nnz * sizeof(Float), cudaMemcpyDeviceToHost), "U_vals");
+    check_cuda_test_error(cudaMemcpy(h_U_cols.data(), d_lu.U_cols, U_nnz * sizeof(Index), cudaMemcpyDeviceToHost), "U_cols");
+    check_cuda_test_error(cudaMemcpy(h_U_row_ptrs.data(), d_lu.U_row_ptrs, (m + 1) * sizeof(Index), cudaMemcpyDeviceToHost), "U_row_ptrs");
 
-    // Clean up
-    cudaFree(d_out_L);
-    cudaFree(d_out_U);
-    cudaFree(d_out_perm);
+    check_cuda_test_error(cudaMemcpy(h_perm_row.data(), d_lu.perm_row, m * sizeof(Index), cudaMemcpyDeviceToHost), "perm_row");
+    check_cuda_test_error(cudaMemcpy(h_perm_col.data(), d_lu.perm_col, m * sizeof(Index), cudaMemcpyDeviceToHost), "perm_col");
+    check_cuda_test_error(cudaMemcpy(h_inv_perm_row.data(), d_lu.inv_perm_row, m * sizeof(Index), cudaMemcpyDeviceToHost), "inv_perm_row");
+    check_cuda_test_error(cudaMemcpy(h_inv_perm_col.data(), d_lu.inv_perm_col, m * sizeof(Index), cudaMemcpyDeviceToHost), "inv_perm_col");
 
+    // L Arrays
+    for(size_t i = 0; i < static_cast<size_t>(L_nnz); ++i) {
+        REQUIRE(h_L_vals[i] == Catch::Approx(cpu_lu.get_L_vals()[i]));
+        REQUIRE(h_L_rows[i] == cpu_lu.get_L_rows()[i]);
+    }
+    for(size_t i = 0; i <= static_cast<size_t>(m); ++i) {
+        REQUIRE(h_L_col_ptrs[i] == cpu_lu.get_L_col_ptrs()[i]);
+    }
+
+    // U Arrays
+    for(size_t i = 0; i < static_cast<size_t>(U_nnz); ++i) {
+        REQUIRE(h_U_vals[i] == Catch::Approx(cpu_lu.get_U_vals()[i]));
+        REQUIRE(h_U_cols[i] == cpu_lu.get_U_cols()[i]);
+    }
+    for(size_t i = 0; i <= static_cast<size_t>(m); ++i) {
+        REQUIRE(h_U_row_ptrs[i] == cpu_lu.get_U_row_ptrs()[i]);
+    }
+
+    // Permutations
+    for(size_t i = 0; i < static_cast<size_t>(m); ++i) {
+        REQUIRE(h_perm_row[i] == cpu_lu.get_perm_row()[i]);
+        REQUIRE(h_perm_col[i] == cpu_lu.get_perm_col()[i]);
+        REQUIRE(h_inv_perm_row[i] == cpu_lu.get_inv_perm_row()[i]);
+        REQUIRE(h_inv_perm_col[i] == cpu_lu.get_inv_perm_col()[i]);
+    }
+
+    // 6. Memory Cleanup
     manager.free_all();
     REQUIRE(arena.occupancy_percentage() == 0);
 }
-

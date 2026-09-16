@@ -144,40 +144,54 @@ __device__ bool device_update_basis(
         return false;
     }
 
+    __shared__ bool success_flag;
+
     if (threadIdx.x == 0) {
+        success_flag = false;
         Index cur_eta = *(ws.num_eta_cols);
+        
         if (cur_eta < ws.eta_col_capacity) {
             Index start = ws.eta_col_starts[cur_eta];
-            Index nnz = 0;
             
+            // Pass 1: Count exact nnz to avoid writing past capacity
+            Index required_nnz = 0;
             for (Index i = 0; i < ws.m; ++i) {
                 Float val = Aq[i];
-                if (i == leaving_row) {
-                    val = 1.0 / d_p;
-                } else {
-                    val = -val / d_p;
-                }
-                
+                val = (i == leaving_row) ? (1.0 / d_p) : (-val / d_p);
                 if (std::abs(val) > 1e-15) {
-                    ws.eta_vals[start + nnz] = val;
-                    ws.eta_rows[start + nnz] = i;
-                    nnz++;
+                    required_nnz++;
                 }
             }
-            
-            ws.eta_pivot_row[cur_eta] = leaving_row;
-            ws.eta_col_starts[cur_eta + 1] = start + nnz;
-            *(ws.num_eta_cols) = cur_eta + 1;
-            *(ws.eta_nnz) = start + nnz;
-            
-            ws.basis_indices[leaving_row] = entering_col;
+
+            if (start + required_nnz <= ws.eta_capacity) {
+                // Pass 2: Actually write the eta entries
+                Index nnz = 0;
+                for (Index i = 0; i < ws.m; ++i) {
+                    Float val = Aq[i];
+                    val = (i == leaving_row) ? (1.0 / d_p) : (-val / d_p);
+                    if (std::abs(val) > 1e-15) {
+                        ws.eta_vals[start + nnz] = val;
+                        ws.eta_rows[start + nnz] = i;
+                        nnz++;
+                    }
+                }
+                
+                ws.eta_pivot_row[cur_eta] = leaving_row;
+                ws.eta_col_starts[cur_eta + 1] = start + required_nnz;
+                *(ws.num_eta_cols) = cur_eta + 1;
+                *(ws.eta_nnz) = start + required_nnz;
+                ws.basis_indices[leaving_row] = entering_col;
+                success_flag = true;
+            } else {
+                *(ws.error_code) = 3; // overflow
+            }
         } else {
             *(ws.error_code) = 3; // overflow
         }
     }
     __syncthreads();
     
-    return true; 
+    return success_flag; 
 }
 
 } // namespace gpu

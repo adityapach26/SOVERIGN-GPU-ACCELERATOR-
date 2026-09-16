@@ -31,9 +31,13 @@ __global__ void execute_device_update_kernel(
     gpu::WorkingBasisState ws,
     Index leaving_row,
     Index entering_col,
-    const Float* Aq)
+    const Float* Aq,
+    bool* success_out)
 {
-    gpu::device_update_basis(ws, leaving_row, entering_col, Aq, 1e-9);
+    bool ok = gpu::device_update_basis(ws, leaving_row, entering_col, Aq, 1e-9);
+    if (threadIdx.x == 0) {
+        *success_out = ok;
+    }
 }
 
 TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
@@ -64,9 +68,10 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
     gpu::DeviceSparseLU d_lu = manager.get_device_struct();
 
     gpu::HBFManager hbf_manager(arena);
+    
+    // Standard state for success tests
     gpu::WorkingBasisState ws = hbf_manager.allocate_working_state(4, 4, 100, 10);
     
-    // initialize ws scalars to zero
     int zero_int = 0;
     Index zero_idx = 0;
     cudaMemcpy(ws.error_code, &zero_int, sizeof(int), cudaMemcpyHostToDevice);
@@ -78,10 +83,8 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
         std::vector<Float> h_rhs = {1.0, 2.0, 3.0, 4.0};
         std::vector<Float> h_rhs_cpu = h_rhs;
         
-        // CPU FTRAN
         cpu_lu.ftran(h_rhs_cpu);
 
-        // GPU FTRAN
         cudaMemcpy(ws.work_vec, h_rhs.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
         execute_device_ftran_kernel<<<1, 32>>>(d_lu, ws, ws.work_vec);
         cudaDeviceSynchronize();
@@ -113,26 +116,39 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
     }
 
     SECTION("FTRAN/BTRAN after FT Update") {
-        std::vector<Float> Aq = {0.5, 0.0, 1.5, -0.5};
+        // [ENGINEERING DECISION] CPU update contract resolution
+        // CPU SparseLU::update(Aq) takes the original column Aq and calls ftran(Aq) internally
+        // to produce d_q. To provide mathematically equivalent data to device_update_basis
+        // (which expects d_q), we run device_ftran(Aq) first, then pass the result to device_update_basis.
+        
+        std::vector<Float> Aq = {0.5, 0.0, 1.5, -0.5}; // original column
         Index leaving_row = 1;
         Index entering_col = 4;
-
-        // The device update expects the mathematically transformed column d_q = B^-1 A_q,
-        // just like the CPU's internal update logic.
-        std::vector<Float> d_q = Aq;
-        cpu_lu.ftran(d_q); 
 
         // Apply update to CPU
         cpu_lu.update(leaving_row, entering_col, Aq);
 
-        // Apply update to GPU using d_q
-        Float* d_Aq = static_cast<Float*>(arena.allocate(4 * sizeof(Float)));
-        cudaMemcpy(d_Aq, d_q.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
-        execute_device_update_kernel<<<1, 32>>>(ws, leaving_row, entering_col, d_Aq);
+        // Apply update to GPU
+        // 1. Compute d_q = B^-1 A_q natively on device
+        cudaMemcpy(ws.work_vec, Aq.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
+        execute_device_ftran_kernel<<<1, 32>>>(d_lu, ws, ws.work_vec);
         cudaDeviceSynchronize();
-        arena.free(d_Aq);
 
-        // Test FTRAN
+        // 2. Perform the update with the computed d_q (now in work_vec)
+        bool* d_success = static_cast<bool*>(arena.allocate(sizeof(bool)));
+        execute_device_update_kernel<<<1, 32>>>(ws, leaving_row, entering_col, ws.work_vec, d_success);
+        cudaDeviceSynchronize();
+
+        bool h_success = false;
+        cudaMemcpy(&h_success, d_success, sizeof(bool), cudaMemcpyDeviceToHost);
+        REQUIRE(h_success == true);
+
+        // Verify successful metadata update
+        Index h_num_cols = 0;
+        cudaMemcpy(&h_num_cols, ws.num_eta_cols, sizeof(Index), cudaMemcpyDeviceToHost);
+        REQUIRE(h_num_cols == 1);
+
+        // Test FTRAN post-update
         std::vector<Float> h_rhs_f = {1.0, 2.0, 3.0, 4.0};
         std::vector<Float> h_cpu_f = h_rhs_f;
         cpu_lu.ftran(h_cpu_f);
@@ -148,7 +164,7 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
             REQUIRE(h_gpu_f[i] == Catch::Approx(h_cpu_f[i]).margin(1e-9));
         }
 
-        // Test BTRAN
+        // Test BTRAN post-update
         std::vector<Float> h_rhs_b = {1.0, 2.0, 3.0, 4.0};
         std::vector<Float> h_cpu_b = h_rhs_b;
         cpu_lu.btran(h_cpu_b);
@@ -163,6 +179,52 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
         for (int i = 0; i < 4; ++i) {
             REQUIRE(h_gpu_b[i] == Catch::Approx(h_cpu_b[i]).margin(1e-9));
         }
+
+        arena.free(d_success);
+    }
+
+    SECTION("Update Capacity Failure Verification") {
+        // Allocate a severely constrained working state to force overflow
+        // Capacity: 0 columns, 0 nnz
+        gpu::WorkingBasisState tiny_ws = hbf_manager.allocate_working_state(4, 4, 0, 0);
+        
+        cudaMemcpy(tiny_ws.error_code, &zero_int, sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(tiny_ws.num_eta_cols, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
+        cudaMemcpy(tiny_ws.eta_nnz, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
+        cudaMemcpy(tiny_ws.eta_col_starts, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
+
+        std::vector<Float> d_q = {0.5, 0.0, 1.5, -0.5}; // Non-trivial d_q
+        cudaMemcpy(tiny_ws.work_vec, d_q.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
+
+        bool* d_success = static_cast<bool*>(arena.allocate(sizeof(bool)));
+        execute_device_update_kernel<<<1, 32>>>(tiny_ws, 1, 4, tiny_ws.work_vec, d_success);
+        cudaDeviceSynchronize();
+
+        bool h_success = true;
+        cudaMemcpy(&h_success, d_success, sizeof(bool), cudaMemcpyDeviceToHost);
+        
+        // 1. Must return false
+        REQUIRE(h_success == false);
+
+        // 2. Must set error code 3
+        int h_error = 0;
+        cudaMemcpy(&h_error, tiny_ws.error_code, sizeof(int), cudaMemcpyDeviceToHost);
+        REQUIRE(h_error == 3);
+
+        // 3. Verify failed update does NOT mutate metadata
+        Index h_num_cols = 1;
+        Index h_eta_nnz = 1;
+        Index h_start = 1;
+        cudaMemcpy(&h_num_cols, tiny_ws.num_eta_cols, sizeof(Index), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&h_eta_nnz, tiny_ws.eta_nnz, sizeof(Index), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&h_start, tiny_ws.eta_col_starts, sizeof(Index), cudaMemcpyDeviceToHost);
+
+        REQUIRE(h_num_cols == 0);
+        REQUIRE(h_eta_nnz == 0);
+        REQUIRE(h_start == 0);
+
+        arena.free(d_success);
+        hbf_manager.free_working_state(tiny_ws);
     }
 
     hbf_manager.free_working_state(ws);

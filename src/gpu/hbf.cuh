@@ -109,6 +109,11 @@ struct WorkingBasisState {
     // Dense working vector for FTRAN/BTRAN operations
     Float* work_vec;
     Float* aux_vec; // Auxiliary vector for FTRAN/BTRAN permutations
+    Float* x; // Primal solution (size num_cols)
+    bool* is_basic; // O(1) basic variable check (size num_cols)
+    Float* pi; // Dual solution (size m)
+    Float* d; // FTRAN vector (size m)
+    Float* d_pi; // BTRAN vector (size m)
 };
 
 /**

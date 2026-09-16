@@ -164,6 +164,11 @@ WorkingBasisState HBFManager::allocate_working_state(
 
     state.work_vec = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
     state.aux_vec = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
+    state.x = static_cast<Float*>(arena_.allocate(num_cols * sizeof(Float)));
+    state.is_basic = static_cast<bool*>(arena_.allocate(num_cols * sizeof(bool)));
+    state.pi = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
+    state.d = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
+    state.d_pi = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
 
     return state;
 }
@@ -171,6 +176,11 @@ WorkingBasisState HBFManager::allocate_working_state(
 void HBFManager::free_working_state(WorkingBasisState& state) {
     arena_.free(state.work_vec);
     arena_.free(state.aux_vec);
+    arena_.free(state.x);
+    arena_.free(state.is_basic);
+    arena_.free(state.pi);
+    arena_.free(state.d);
+    arena_.free(state.d_pi);
     arena_.free(state.eta_nnz);
     arena_.free(state.num_eta_cols);
     arena_.free(state.eta_pivot_row);

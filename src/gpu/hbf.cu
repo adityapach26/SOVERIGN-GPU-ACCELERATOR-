@@ -163,12 +163,14 @@ WorkingBasisState HBFManager::allocate_working_state(
     state.eta_nnz = static_cast<Index*>(arena_.allocate(sizeof(Index)));
 
     state.work_vec = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
+    state.aux_vec = static_cast<Float*>(arena_.allocate(m * sizeof(Float)));
 
     return state;
 }
 
 void HBFManager::free_working_state(WorkingBasisState& state) {
     arena_.free(state.work_vec);
+    arena_.free(state.aux_vec);
     arena_.free(state.eta_nnz);
     arena_.free(state.num_eta_cols);
     arena_.free(state.eta_pivot_row);

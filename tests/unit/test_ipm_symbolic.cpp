@@ -71,3 +71,4 @@ TEST_CASE("Phase 14.1: IPM CPU Symbolic Phase and AMD Ordering", "[symbolic][ipm
     REQUIRE(sym.parent[3] == 4);
     REQUIRE(sym.parent[4] == -1);
 }
+

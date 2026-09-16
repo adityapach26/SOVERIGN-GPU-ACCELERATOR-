@@ -23,46 +23,45 @@ __global__ void run_gpu_dual_simplex(
     gpu::dual_simplex_kernel(model, lu, ws, obj_sign, max_iter, status_out, iter_out);
 }
 
-TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Exact CPU Parity & Multi-Iter", "[cuda][dual]") {
+TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Mathematically Certified Pivot Certificate", "[cuda][dual]") {
     core::Model host_model;
     host_model.sense = OptimizationSense::Minimize;
     host_model.rows = 2;
-    host_model.cols = 5;
-    host_model.nnz = 8;
+    host_model.cols = 4;
+    host_model.nnz = 7;
     
-    // Nontrivial Mathematically Certified Multi-Iteration LP
-    // Min z = 3x1 + 4x2 + 5x3
-    //  1x1 + 0x2 - 2x3 + 1s1 - 1s2 =  1
-    // -2x1 - 2x2 - 1x3 + 0s1 + 1s2 = -6
+    // Nontrivial Mathematically Certified LP:
+    // Min z = 4x1 + 5x2
+    // -3x1 - 3x2 + s1 + s2 = -6
+    // -2x1 - 1x2 + 0  + s2 = -3
     
     host_model.A.rows = 2;
-    host_model.A.cols = 5;
-    host_model.A.col_ptrs = {0, 2, 3, 5, 6, 8};
-    host_model.A.row_indices = {0, 1, 1, 0, 1, 0, 0, 1};
-    host_model.A.values = {1.0, -2.0, -2.0, -2.0, -1.0, 1.0, -1.0, 1.0};
+    host_model.A.cols = 4;
+    host_model.A.col_ptrs = {0, 2, 4, 5, 7};
+    host_model.A.row_indices = {0, 1, 0, 1, 0, 0, 1};
+    host_model.A.values = {-3.0, -2.0, -3.0, -1.0, 1.0, 1.0, 1.0};
     
-    host_model.obj = {3.0, 4.0, 5.0, 0.0, 0.0};
-    host_model.lb = {0.0, 0.0, 0.0, 0.0, 0.0};
-    host_model.ub = {1e30, 1e30, 1e30, 1e30, 1e30};
-    host_model.rhs = {1.0, -6.0};
+    host_model.obj = {4.0, 5.0, 0.0, 0.0};
+    host_model.lb = {0.0, 0.0, 0.0, 0.0};
+    host_model.ub = {1e30, 1e30, 1e30, 1e30};
+    host_model.rhs = {-6.0, -3.0};
     
     simplex::Basis host_basis;
-    host_basis.col_status = {simplex::BasisStatus::AtLower, simplex::BasisStatus::AtLower, simplex::BasisStatus::AtLower,
+    host_basis.col_status = {simplex::BasisStatus::AtLower, simplex::BasisStatus::AtLower,
                              simplex::BasisStatus::Basic, simplex::BasisStatus::Basic};
     
-    // Initial basis B0 = {s1, s2} -> cols 3 and 4
-    // B0 = [[1, -1], [0, 1]] (NOT Identity)
-    host_basis.basic_indices = {3, 4};
+    // Initial basis B0 = {s1, s2} -> cols 2 and 3
+    // B0 = [[1, 1], [0, 1]] (NOT Identity)
+    host_basis.basic_indices = {2, 3};
     
     // EXACT Ax=b verification:
-    // x = {0, 0, 0, -5, -6}
-    // Eq 1: 1(0) - 2(0) + 1(-5) - 1(-6) = 1 (Matches RHS)
-    // Eq 2: -2(0) - 2(0) - 1(0) + 0(-5) + 1(-6) = -6 (Matches RHS)
-    std::vector<Float> host_x = {0.0, 0.0, 0.0, -5.0, -6.0};
+    // x = {0, 0, -3, -3}
+    // Eq 1: -3(0) - 3(0) + 1(-3) + 1(-3) = -6 (Matches RHS)
+    // Eq 2: -2(0) - 1(0) + 0(-3) + 1(-3) = -3 (Matches RHS)
+    std::vector<Float> host_x = {0.0, 0.0, -3.0, -3.0};
     
     // CPU dual simplex to get reference result
     numerics::SparseLUFactorization cpu_lu;
-    // Make copies since dual_simplex_phase2 modifies them
     simplex::Basis cpu_basis = host_basis;
     std::vector<Float> cpu_x = host_x;
     
@@ -70,20 +69,18 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Exact CPU Parity & Multi-Iter", "[c
         host_model, cpu_basis, cpu_x, cpu_lu
     );
     
+    // Test Requirement 1 & 2: Assert CPU behavior against mathematical certificate
     REQUIRE(cpu_status == simplex::SimplexStatus::Optimal);
-    // Expected mathematically certified optimal solution: x1 = 1, x2 = 2
     REQUIRE(cpu_x[0] == Catch::Approx(1.0).margin(1e-7));
-    REQUIRE(cpu_x[1] == Catch::Approx(2.0).margin(1e-7));
+    REQUIRE(cpu_x[1] == Catch::Approx(1.0).margin(1e-7));
     REQUIRE(cpu_x[2] == Catch::Approx(0.0).margin(1e-7));
     REQUIRE(cpu_x[3] == Catch::Approx(0.0).margin(1e-7));
-    REQUIRE(cpu_x[4] == Catch::Approx(0.0).margin(1e-7));
 
     // ==========================================
     // GPU EXECUTION
     // ==========================================
     gpu::VRAMArena arena(1024 * 1024);
     
-    // Factorize the INITIAL basis for GPU root
     numerics::SparseLUFactorization root_lu;
     root_lu.factorize(host_model.A, host_basis);
 
@@ -93,9 +90,8 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Exact CPU Parity & Multi-Iter", "[c
     gpu::DeviceSparseLU d_lu = manager.get_device_struct();
 
     gpu::HBFManager hbf_manager(arena);
-    gpu::WorkingBasisState ws = hbf_manager.allocate_working_state(2, 5, 100, 10);
+    gpu::WorkingBasisState ws = hbf_manager.allocate_working_state(2, 4, 100, 10);
 
-    // Initialize the working state identically to the start of the CPU phase
     int zero_int = 0;
     Index zero_idx = 0;
     cudaMemcpy(ws.error_code, &zero_int, sizeof(int), cudaMemcpyHostToDevice);
@@ -103,17 +99,17 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Exact CPU Parity & Multi-Iter", "[c
     cudaMemcpy(ws.eta_nnz, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
     cudaMemcpy(ws.eta_col_starts, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
     
+    // Test Requirement 3: Initialize GPU with exact same valid initial state
     cudaMemcpy(ws.basis_indices, host_basis.basic_indices.data(), 2 * sizeof(Index), cudaMemcpyHostToDevice);
-    cudaMemcpy(ws.x, host_x.data(), 5 * sizeof(Float), cudaMemcpyHostToDevice);
+    cudaMemcpy(ws.x, host_x.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
     
-    std::vector<bool> host_is_basic(5, false);
+    std::vector<bool> host_is_basic(4, false);
     for (Index b : host_basis.basic_indices) host_is_basic[b] = true;
-    cudaMemcpy(ws.is_basic, host_is_basic.data(), 5 * sizeof(bool), cudaMemcpyHostToDevice);
+    cudaMemcpy(ws.is_basic, host_is_basic.data(), 4 * sizeof(bool), cudaMemcpyHostToDevice);
 
     gpu::DeviceSimplexStatus* d_status = static_cast<gpu::DeviceSimplexStatus*>(arena.allocate(sizeof(gpu::DeviceSimplexStatus)));
     Index* d_iter = static_cast<Index*>(arena.allocate(sizeof(Index)));
 
-    // Execute exactly one node
     run_gpu_dual_simplex<<<1, 32>>>(d_model, d_lu, ws, 1.0, 100, d_status, d_iter);
     cudaDeviceSynchronize();
 
@@ -123,29 +119,40 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Exact CPU Parity & Multi-Iter", "[c
     Index h_iter = 0;
     cudaMemcpy(&h_iter, d_iter, sizeof(Index), cudaMemcpyDeviceToHost);
 
-    // PROOF: Verify multiple iterations occurred natively on GPU
-    // Iteration 1 leaves s2, enters x1 (solution remains primal infeasible at s1=-2)
-    // Iteration 2 leaves s1, enters x2 (optimal)
+    // Test Requirement 4: Assert GPU iteration count >= 2
+    // Certificate: Iteration 1 leaves s1, enters x2. Iteration 2 leaves s2, enters x1.
     REQUIRE(h_iter >= 2);
 
+    // Test Requirement 5: Assert GPU status == Optimal
     REQUIRE(h_status == gpu::DeviceSimplexStatus::Optimal);
 
-    std::vector<Float> gpu_x(5);
-    cudaMemcpy(gpu_x.data(), ws.x, 5 * sizeof(Float), cudaMemcpyDeviceToHost);
+    std::vector<Float> gpu_x(4);
+    cudaMemcpy(gpu_x.data(), ws.x, 4 * sizeof(Float), cudaMemcpyDeviceToHost);
 
-    // Compare GPU solution to CPU solution EXACTLY
-    for (Index i = 0; i < 5; ++i) {
+    // Test Requirement 6: Compare complete GPU x against CPU x
+    for (Index i = 0; i < 4; ++i) {
         REQUIRE(gpu_x[i] == Catch::Approx(cpu_x[i]).margin(1e-7));
     }
+    
+    // Test Requirement 8: Verify final feasibility numerically where practical
+    REQUIRE(gpu_x[0] >= -1e-7);
+    REQUIRE(gpu_x[1] >= -1e-7);
+    REQUIRE(gpu_x[2] >= -1e-7);
+    REQUIRE(gpu_x[3] >= -1e-7);
 
-    // Verify basis alignment (basic indices)
+    // Test Requirement 9: Compare objective values
+    Float cpu_obj = 4.0 * cpu_x[0] + 5.0 * cpu_x[1];
+    Float gpu_obj = 4.0 * gpu_x[0] + 5.0 * gpu_x[1];
+    REQUIRE(gpu_obj == Catch::Approx(9.0).margin(1e-7));
+    REQUIRE(gpu_obj == Catch::Approx(cpu_obj).margin(1e-7));
+
+    // Test Requirement 7: Compare GPU basis against CPU basis
     std::vector<Index> gpu_basis_indices(2);
     cudaMemcpy(gpu_basis_indices.data(), ws.basis_indices, 2 * sizeof(Index), cudaMemcpyDeviceToHost);
 
-    std::vector<bool> gpu_is_basic(5);
-    cudaMemcpy(gpu_is_basic.data(), ws.is_basic, 5 * sizeof(bool), cudaMemcpyDeviceToHost);
+    std::vector<bool> gpu_is_basic(4);
+    cudaMemcpy(gpu_is_basic.data(), ws.is_basic, 4 * sizeof(bool), cudaMemcpyDeviceToHost);
 
-    // Check CPU basic indices are present and match exactly the state boolean array
     for (Index i = 0; i < 2; ++i) {
         Index b_idx = cpu_basis.basic_indices[i];
         REQUIRE(gpu_is_basic[b_idx] == true);

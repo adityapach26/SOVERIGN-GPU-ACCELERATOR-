@@ -23,6 +23,7 @@ add_executable(sankhya_unit_tests
     unit/test_primal_simplex.cpp
     unit/test_dual_simplex.cpp
     unit/test_scaling.cpp
+    unit/test_ipm_symbolic.cpp
 )
 
 # Link sankhya_core and Catch2 main entrypoint

@@ -6,6 +6,7 @@ add_library(sankhya_core
     numerics/sparse_lu.cpp
     simplex/primal.cpp
     simplex/dual.cpp
+    ipm/symbolic.cpp
     presolve/scaling.cpp
 )
 

@@ -44,6 +44,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_device_sparse_lu.cu
         unit/test_device_ftran.cu
         unit/test_device_dual_simplex.cu
+        unit/test_batched_dual_simplex.cu
         unit/test_device_model.cu
         unit/test_hbf.cu
         unit/test_pricing.cu

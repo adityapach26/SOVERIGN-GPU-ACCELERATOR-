@@ -48,3 +48,16 @@ __global__ void dual_simplex_kernel(
 } // namespace gpu
 } // namespace sankhya
 
+
+/**
+ * @brief Core dual simplex loop callable from other device functions/kernels.
+ */
+__device__ void device_dual_simplex_iteration_loop(
+    DeviceModel model,
+    DeviceSparseLU lu,
+    WorkingBasisState ws,
+    Float obj_sign,
+    Index max_iterations,
+    DeviceSimplexStatus* status_out,
+    Index* iter_count_out
+);

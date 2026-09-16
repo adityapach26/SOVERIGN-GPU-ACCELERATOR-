@@ -9,7 +9,7 @@ namespace gpu {
 __device__ const Float kDefaultFeasibilityTol = 1e-7;
 __device__ const Float kDefaultPivotTol = 1e-7;
 
-__global__ void dual_simplex_kernel(
+__device__ void device_dual_simplex_iteration_loop(
     DeviceModel model,
     DeviceSparseLU lu,
     WorkingBasisState ws,
@@ -18,7 +18,6 @@ __global__ void dual_simplex_kernel(
     DeviceSimplexStatus* status_out,
     Index* iter_count_out
 ) {
-    if (blockIdx.x != 0) return;
 
     __shared__ Index p_shared;
     __shared__ Index q_shared;
@@ -210,3 +209,16 @@ __global__ void dual_simplex_kernel(
 } // namespace gpu
 } // namespace sankhya
 
+
+__global__ void dual_simplex_kernel(
+    DeviceModel model,
+    DeviceSparseLU lu,
+    WorkingBasisState ws,
+    Float obj_sign,
+    Index max_iterations,
+    DeviceSimplexStatus* status_out,
+    Index* iter_count_out
+) {
+    if (blockIdx.x != 0) return;
+    device_dual_simplex_iteration_loop(model, lu, ws, obj_sign, max_iterations, status_out, iter_count_out);
+}

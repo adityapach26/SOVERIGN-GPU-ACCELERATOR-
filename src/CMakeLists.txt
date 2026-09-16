@@ -21,6 +21,7 @@ if(SANKHYA_ENABLE_CUDA)
         gpu/device_sparse_lu.cu
         gpu/device_ftran.cu
         gpu/device_dual_simplex.cu
+    gpu/batched_dual_simplex.cu
         gpu/device_model.cu
         gpu/hbf.cu
         cuda/pricing.cu

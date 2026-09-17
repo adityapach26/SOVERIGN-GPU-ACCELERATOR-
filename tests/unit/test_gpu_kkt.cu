@@ -63,31 +63,43 @@ TEST_CASE("Phase 15.1: GPU Sparse Cholesky Factorization Path (Hardened)", "[cud
     
     cudaError_t err = cudaMemcpy(host_L_vals.data(), d_L_vals, nnz_L * sizeof(Float), cudaMemcpyDeviceToHost);
     if (err == cudaSuccess) {
-        Float expected_L00 = std::sqrt(5.0);
-        Float expected_L11 = std::sqrt(5.0);
-        Float expected_L20 = 1.0 / std::sqrt(5.0);
-        Float expected_L21 = 1.0 / std::sqrt(5.0);
-        Float expected_L22 = std::sqrt(5.6);
+        // Reconstruct the dense 3x3 lower-triangular L matrix on the host for verification
+        std::vector<std::vector<Float>> dense_L(3, std::vector<Float>(3, 0.0));
         
-        // Check L * L^T approx M_permuted
-        // We know the pattern is:
-        // row 0: 0
-        // row 1: 1
-        // row 2: 0, 1, 2
-        // So host_L_vals = {L00, L11, L20, L21, L22}
-        Float L00 = host_L_vals[0];
-        Float L11 = host_L_vals[1];
-        Float L20 = host_L_vals[2];
-        Float L21 = host_L_vals[3];
-        Float L22 = host_L_vals[4];
+        // We explicitly know the CSR structure that was generated for L:
+        // row_ptrs = {0, 1, 2, 5}
+        // col_indices = {0, 1, 0, 1, 2}
+        std::vector<Index> host_L_row_ptrs = {0, 1, 2, 5};
+        std::vector<Index> host_L_col_indices = {0, 1, 0, 1, 2};
         
-        Float res_00 = (L00 * L00) - 5.0;
-        Float res_11 = (L11 * L11) - 5.0;
-        Float res_20 = (L20 * L00) - 1.0;
-        Float res_21 = (L21 * L11) - 1.0;
-        Float res_22 = (L20*L20 + L21*L21 + L22*L22) - 6.0;
+        for (Index i = 0; i < 3; ++i) {
+            for (Index p = host_L_row_ptrs[i]; p < host_L_row_ptrs[i+1]; ++p) {
+                Index j = host_L_col_indices[p];
+                dense_L[i][j] = host_L_vals[p];
+            }
+        }
         
-        Float factor_residual = std::sqrt(res_00*res_00 + res_11*res_11 + res_20*res_20 + res_21*res_21 + res_22*res_22);
+        // Calculate R = LL^T - M_permuted
+        Float R_norm_sq = 0.0;
+        // M_permuted dense:
+        Float dense_M_perm[3][3] = {
+            {5.0, 0.0, 1.0},
+            {0.0, 5.0, 1.0},
+            {1.0, 1.0, 6.0}
+        };
+        
+        for (Index i = 0; i < 3; ++i) {
+            for (Index j = 0; j < 3; ++j) {
+                Float LLT_ij = 0.0;
+                for (Index k = 0; k < 3; ++k) {
+                    LLT_ij += dense_L[i][k] * dense_L[j][k];
+                }
+                Float diff = LLT_ij - dense_M_perm[i][j];
+                R_norm_sq += diff * diff;
+            }
+        }
+        
+        Float factor_residual = std::sqrt(R_norm_sq);
         REQUIRE(factor_residual < 1e-6);
     }
     

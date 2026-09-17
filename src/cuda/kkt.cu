@@ -275,19 +275,9 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
 void GPUKKTCholeskySolver::initialize_cusparse() {
     CHECK_CUSPARSE(cusparseCreate(&handle_));
 
-    // Wait! cuSPARSE triangular solve requires the diagonal to be present in L.
-    // Our symbolic L_pattern is STRICTLY lower triangular (the diagonal is implicit).
-    // In Phase 15.1, we assume the user/solver provides L with diagonals, 
-    // or we tell cuSPARSE the diagonal is unit.
-    // Actually, Cholesky L has a non-unit diagonal.
-    // For standard cuSPARSE SpSV, it reads the diagonal from the sparse matrix.
-    // Since we will test bypassing the blocker with a provided L (including diagonal),
-    // we set up the descriptor for a standard sparse matrix.
-    
-    // For testing triangular solves, we assume d_L_vals_ includes the diagonal if provided by the test bypass.
-    // Wait, sym.L_pattern is strictly lower triangular. The test bypass will probably re-upload a full L matrix (with diagonals)
-    // or we can just specify CUSPARSE_DIAG_TYPE_NON_UNIT and expect the diagonal elements to be included.
-    
+    // The GPU numerical factorization natively generates the true L factor.
+    // The L matrix is lower triangular and has a non-unit diagonal.
+    // We explicitly configure the cuSPARSE descriptor for these properties.
     Index nnz_L;
     CHECK_CUDA(cudaMemcpy(&nnz_L, d_L_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
 
@@ -295,6 +285,12 @@ void GPUKKTCholeskySolver::initialize_cusparse() {
                                      d_L_row_ptrs_, d_L_col_indices_, d_L_vals_,
                                      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                                      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+    cusparseFillMode_t fill_mode = CUSPARSE_FILL_MODE_LOWER;
+    CHECK_CUSPARSE(cusparseSpMatSetAttribute(descr_L_, CUSPARSE_SPMAT_FILL_MODE, &fill_mode, sizeof(fill_mode)));
+
+    cusparseDiagType_t diag_type = CUSPARSE_DIAG_TYPE_NON_UNIT;
+    CHECK_CUSPARSE(cusparseSpMatSetAttribute(descr_L_, CUSPARSE_SPMAT_DIAG_TYPE, &diag_type, sizeof(diag_type)));
 
     // cuSPARSE requires SpSV descriptor initialization
     CHECK_CUSPARSE(cusparseSpSV_createDescr(&spsv_descr_L_));

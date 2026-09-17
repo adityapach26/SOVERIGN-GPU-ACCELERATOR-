@@ -21,10 +21,8 @@ namespace gpu {
  * 1. CPU orchestration initializes structural data.
  * 2. M is constructed numerically directly on GPU using a custom exact dot-product kernel.
  * 3. Cholesky factorization is conceptually intended for GPU natively.
- *    [B] Engineering Decision: Full supernodal GPU-resident sparse Cholesky requires 
- *    a massive elimination tree and dense supernode block scheduler, or the NVIDIA cuDSS 
- *    library (unavailable in standard CUDA Toolkit). We structure the API properly 
- *    and isolate the blocker, while executing the required SpSV triangular solves via cuSPARSE.
+ *    [B] Engineering Decision: We implement a custom, exact, up-looking sparse Cholesky factorization
+ *    executed entirely on the GPU utilizing elimination-tree level parallelism.
  * 4. Forward and backward triangular solves execute natively via cuSPARSE.
  */
 class GPUKKTCholeskySolver {
@@ -61,7 +59,7 @@ public:
      */
     void gpu_cholesky_solve(std::vector<Float>& rhs);
 
-    // Expose device pointers for testing/bypassing blockers
+    // Expose device pointers for testing and verification
     Float* get_device_L_values() const { return d_L_vals_; }
 
 private:

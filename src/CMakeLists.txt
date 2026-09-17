@@ -27,5 +27,10 @@ if(SANKHYA_ENABLE_CUDA)
         gpu/hbf.cu
         cuda/pricing.cu
         cuda/ratio_test.cu
+        cuda/kkt.cu
     )
+endif()
+
+if(SANKHYA_ENABLE_CUDA)
+    target_link_libraries(sankhya_core PRIVATE cusparse)
 endif()

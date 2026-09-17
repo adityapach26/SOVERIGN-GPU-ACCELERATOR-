@@ -51,5 +51,6 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_pricing.cu
         unit/test_ratio_test.cu
         unit/test_gpu_kkt.cu
+        unit/test_mehrotra.cu
     )
 endif()

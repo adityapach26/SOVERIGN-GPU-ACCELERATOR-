@@ -353,7 +353,13 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize(
 
     Float* d_Theta = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
     CHECK_CUDA(cudaMemcpy(d_Theta, Theta.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice));
+    
+    gpu_cholesky_factorize_device(d_Theta);
+    
+    arena_.free(d_Theta);
+}
 
+void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     // 1. Construct numerical normal matrix M = A Theta A^T on GPU
     int threads = 256;
     int blocks = (m_ + threads - 1) / threads;
@@ -367,7 +373,6 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize(
     );
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    arena_.free(d_Theta);
 
     // 2. Cholesky numerical factorization (M = LL^T)
     // [B] Engineering Decision: We implement a custom, exact, up-looking sparse Cholesky factorization
@@ -405,9 +410,16 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
     }
 
     Float* d_rhs_orig = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-    Float* d_rhs_perm = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-
     CHECK_CUDA(cudaMemcpy(d_rhs_orig, rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
+    
+    gpu_cholesky_solve_device(d_rhs_orig);
+    
+    CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs_orig, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    arena_.free(d_rhs_orig);
+}
+
+void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
+    Float* d_rhs_perm = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
 
     int threads = 256;
     int blocks = (m_ + threads - 1) / threads;
@@ -454,9 +466,7 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs_orig, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
     arena_.free(d_rhs_perm);
-    arena_.free(d_rhs_orig);
 
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_r));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_z));

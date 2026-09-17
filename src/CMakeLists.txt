@@ -7,6 +7,7 @@ add_library(sankhya_core
     simplex/primal.cpp
     simplex/dual.cpp
     ipm/symbolic.cpp
+    ipm/mehrotra.cpp
     presolve/scaling.cpp
 )
 
@@ -28,6 +29,7 @@ if(SANKHYA_ENABLE_CUDA)
         cuda/pricing.cu
         cuda/ratio_test.cu
         cuda/kkt.cu
+        ipm/mehrotra_device.cu
     )
 endif()
 

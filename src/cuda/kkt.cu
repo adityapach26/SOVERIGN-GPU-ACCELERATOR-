@@ -80,6 +80,8 @@ __global__ void cholesky_level_kernel(
     const Index* L_row_ptrs, const Index* L_col_indices, Float* L_vals,
     int* error_flag
 ) {
+    if (*error_flag > 0) return; // Propagate failure immediately
+    
     Index idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_nodes) return;
     
@@ -107,7 +109,7 @@ __global__ void cholesky_level_kernel(
             }
             if (sum <= 0.0) {
                 atomicAdd(error_flag, 1);
-                L_vals[p] = 1.0; // dummy to prevent division by zero for other threads
+                return; // Mathematical failure (not SPD). Do not fake L.
             } else {
                 L_vals[p] = sqrt(sum);
             }
@@ -214,13 +216,34 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     d_z_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     
         // 6. Compute elimination tree levels for parallel GPU scheduling
+    // Topological depth calculation handling chains, stars, and branching trees correctly.
     std::vector<Index> level(m_, 0);
-    Index max_level = 0;
+    std::vector<Index> in_degree(m_, 0);
     for (Index i = 0; i < m_; ++i) {
         if (sym.parent[i] != -1) {
-            level[sym.parent[i]] = std::max(level[sym.parent[i]], level[i] + 1);
+            in_degree[sym.parent[i]]++;
         }
-        max_level = std::max(max_level, level[i]);
+    }
+    
+    std::vector<Index> queue;
+    for (Index i = 0; i < m_; ++i) {
+        if (in_degree[i] == 0) {
+            queue.push_back(i);
+        }
+    }
+    
+    Index head = 0;
+    Index max_level = 0;
+    while (head < queue.size()) {
+        Index u = queue[head++];
+        Index p = sym.parent[u];
+        if (p != -1) {
+            level[p] = std::max(level[p], level[u] + 1);
+            max_level = std::max(max_level, level[p]);
+            if (--in_degree[p] == 0) {
+                queue.push_back(p);
+            }
+        }
     }
     num_levels_ = max_level + 1;
     

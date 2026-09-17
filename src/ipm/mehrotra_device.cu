@@ -303,7 +303,10 @@ private:
     
     cusparseSpMatDescr_t descr_A_;
     cusparseDnVecDescr_t vec_x_, vec_y_, vec_s_, vec_rp_, vec_rd_, vec_b_, vec_c_, vec_v_, vec_rkkt_, vec_dy_;
-};MehrotraResult MehrotraSolver::Impl::solve() {
+
+};
+
+MehrotraResult MehrotraSolver::Impl::solve() {
     MehrotraResult result;
     result.status = SimplexStatus::Optimal;
     result.iterations = 0;
@@ -403,6 +406,18 @@ private:
     result.duality_gap = kernels::compute_mu(n_, d_x_, d_s_);
     result.objective_value = kernels::compute_objective(n_, d_c_, d_x_);
     return result;
+}
+
+MehrotraSolver::MehrotraSolver(const core::Model& model) {
+    impl_ = new Impl(model);
+}
+
+MehrotraSolver::~MehrotraSolver() {
+    delete impl_;
+}
+
+MehrotraResult MehrotraSolver::solve() {
+    return impl_->solve();
 }
 
 } // namespace ipm

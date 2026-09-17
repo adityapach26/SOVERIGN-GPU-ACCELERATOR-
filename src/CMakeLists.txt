@@ -7,7 +7,6 @@ add_library(sankhya_core
     simplex/primal.cpp
     simplex/dual.cpp
     ipm/symbolic.cpp
-    ipm/mehrotra.cpp
     presolve/scaling.cpp
 )
 

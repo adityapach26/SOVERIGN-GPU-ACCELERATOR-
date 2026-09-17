@@ -5,6 +5,7 @@
 #include <vector>
 #include <iostream>
 #include <cmath>
+#include <cuda_runtime.h>
 
 using namespace sankhya;
 
@@ -18,6 +19,12 @@ TEST_CASE("Phase 15.2: GPU Mehrotra Predictor-Corrector IPM", "[cuda][ipm]") {
     // Optimal solution: x1 = 0, x2 = 4, x3 = 0, x4 = 0
     // Objective: -20
     
+    int deviceCount = 0;
+    cudaError_t err = cudaGetDeviceCount(&deviceCount);
+    if (err != cudaSuccess || deviceCount == 0) {
+        SKIP("CUDA Runtime: NOT AVAILABLE (Environment cannot execute GPU KKT solve)");
+    }
+
     core::Model model;
     model.sense = OptimizationSense::Minimize;
     
@@ -34,20 +41,21 @@ TEST_CASE("Phase 15.2: GPU Mehrotra Predictor-Corrector IPM", "[cuda][ipm]") {
     
     model.finalize();
     
-    // Run Mehrotra IPM
     ipm::MehrotraSolver solver(model);
     ipm::MehrotraResult result;
     
-    try {
-        result = solver.solve();
-    } catch (const std::exception& e) {
-        // If CUDA runtime is unavailable, this might throw or fail gracefully depending on setup.
-        // We catch it and report for static validation purposes.
-        SUCCEED("CUDA Runtime unavailable or exception: " + std::string(e.what()));
-        return;
-    }
+    REQUIRE_NOTHROW(result = solver.solve());
     
-    // If it reaches here, it ran on GPU!
+    std::cout << "\n=== Phase 15.2 Validation Record ===" << std::endl;
+    std::cout << "CUDA Device Availability: VERIFIED" << std::endl;
+    std::cout << "Iterations: " << result.iterations << std::endl;
+    std::cout << "Final Objective: " << result.objective_value << std::endl;
+    std::cout << "Primal Residual: " << result.primal_residual << std::endl;
+    std::cout << "Dual Residual: " << result.dual_residual << std::endl;
+    std::cout << "Duality Gap: " << result.duality_gap << std::endl;
+    std::cout << "Convergence Status: " << static_cast<int>(result.status) << std::endl;
+    std::cout << "====================================\n" << std::endl;
+
     REQUIRE(result.status == SimplexStatus::Optimal);
     REQUIRE(result.iterations > 0);
     REQUIRE(result.primal_residual < 1e-6);

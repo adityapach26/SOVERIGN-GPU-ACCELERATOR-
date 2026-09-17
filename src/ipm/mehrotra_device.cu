@@ -12,6 +12,16 @@
 #include <algorithm>
 #include <iostream>
 
+#define CHECK_CUDA_IPM(func)                                                   \
+{                                                                              \
+    cudaError_t status = (func);                                               \
+    if (status != cudaSuccess) {                                               \
+        throw std::runtime_error(std::string("CUDA API failed: ") +            \
+                                 cudaGetErrorString(status) +                  \
+                                 " at line " + std::to_string(__LINE__));      \
+    }                                                                          \
+}
+
 #define CHECK_CUSPARSE_IPM(func)                                               \
 {                                                                              \
     cusparseStatus_t status = (func);                                          \
@@ -158,17 +168,17 @@ public:
         
         d_b_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
         d_c_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        cudaMemcpy(d_b_, model.rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_c_, model.obj.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_b_, model.rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_c_, model.obj.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice));
         
         // cuSPARSE descriptors for A and A^T
-        CHECK_CUDA(cudaMalloc(&d_A_row_ptrs_, (m_ + 1) * sizeof(Index)));
-        CHECK_CUDA(cudaMalloc(&d_A_col_indices_, model.A.col_indices.size() * sizeof(Index)));
-        CHECK_CUDA(cudaMalloc(&d_A_vals_, model.A.values.size() * sizeof(Float)));
+        d_A_row_ptrs_ = static_cast<Index*>(arena_.allocate((m_ + 1) * sizeof(Index)));
+        d_A_col_indices_ = static_cast<Index*>(arena_.allocate(model.A.col_indices.size() * sizeof(Index)));
+        d_A_vals_ = static_cast<Float*>(arena_.allocate(model.A.values.size() * sizeof(Float)));
         
-        cudaMemcpy(d_A_row_ptrs_, model.A.row_ptrs.data(), (m_ + 1) * sizeof(Index), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_A_col_indices_, model.A.col_indices.data(), model.A.col_indices.size() * sizeof(Index), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_A_vals_, model.A.values.data(), model.A.values.size() * sizeof(Float), cudaMemcpyHostToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_A_row_ptrs_, model.A.row_ptrs.data(), (m_ + 1) * sizeof(Index), cudaMemcpyHostToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_A_col_indices_, model.A.col_indices.data(), model.A.col_indices.size() * sizeof(Index), cudaMemcpyHostToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_A_vals_, model.A.values.data(), model.A.values.size() * sizeof(Float), cudaMemcpyHostToDevice));
         
         CHECK_CUSPARSE_IPM(cusparseCreateCsr(&descr_A_, m_, n_, model.A.values.size(),
             d_A_row_ptrs_, d_A_col_indices_, d_A_vals_,
@@ -200,9 +210,9 @@ public:
         cusparseDestroyDnVec(vec_dy_);
         cusparseDestroySpMat(descr_A_);
         cusparseDestroy(handle_);
-        cudaFree(d_A_row_ptrs_);
-        cudaFree(d_A_col_indices_);
-        cudaFree(d_A_vals_);
+        arena_.free(d_A_row_ptrs_);
+        arena_.free(d_A_col_indices_);
+        arena_.free(d_A_vals_);
     }
 
     MehrotraResult solve();
@@ -211,7 +221,7 @@ private:
     void compute_residuals() {
         Float alpha = 1.0, beta = -1.0;
         // rp = A x - b. Initialize rp with -b.
-        cudaMemcpy(d_rp_, d_b_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_rp_, d_b_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         int blocks_m = (m_ + 255) / 256;
         kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, -2.0, d_b_, d_rp_); // rp = -b (since memcpy copies b, this makes it -b)
         
@@ -226,7 +236,7 @@ private:
         arena_.free(dBuffer);
 
         // rd = A^T y + s - c
-        cudaMemcpy(d_rd_, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_rd_, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         int blocks_n = (n_ + 255) / 256;
         kernels::vector_add_kernel<<<blocks_n, 256>>>(n_, -1.0, d_c_, d_rd_); // rd = s - c
         
@@ -241,7 +251,7 @@ private:
     
     void compute_rkkt() {
         // rkkt = -rp + A v
-        cudaMemcpy(d_r_kkt_, d_rp_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_r_kkt_, d_rp_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         int blocks_m = (m_ + 255) / 256;
         kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, -2.0, d_rp_, d_r_kkt_); // rkkt = -rp
         
@@ -257,7 +267,7 @@ private:
     
     void compute_ds(Float* d_ds_out) {
         // ds = -rd - A^T dy
-        cudaMemcpy(d_ds_out, d_rd_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_ds_out, d_rd_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         int blocks_n = (n_ + 255) / 256;
         kernels::vector_add_kernel<<<blocks_n, 256>>>(n_, -2.0, d_rd_, d_ds_out); // ds = -rd
         
@@ -351,15 +361,15 @@ private:
         // Let's use a temporary vector to hold x_aff and s_aff.
         Float* d_tmp_x = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
         Float* d_tmp_s = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        cudaMemcpy(d_tmp_x, d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice);
-        cudaMemcpy(d_tmp_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice);
+        CHECK_CUDA_IPM(cudaMemcpy(d_tmp_x, d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_tmp_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         kernels::update_variables(n_, alpha_p_aff, d_dx_aff_, d_tmp_x);
         kernels::update_variables(n_, alpha_d_aff, d_ds_aff_, d_tmp_s);
         Float mu_aff = kernels::compute_mu(n_, d_tmp_x, d_tmp_s);
         arena_.free(d_tmp_s);
         arena_.free(d_tmp_x);
         
-        Float sigma = std::pow(mu_aff / mu, 3.0);
+        Float sigma = std::pow(std::max(0.0, mu_aff) / std::max(1e-16, mu), 3.0);
         
         // 2. Corrector step
         kernels::compute_r_xs(n_, d_x_, d_s_, d_dx_aff_, d_ds_aff_, sigma * mu, d_r_xs_);

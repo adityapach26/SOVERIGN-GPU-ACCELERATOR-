@@ -24,6 +24,16 @@ namespace gpu {
     }                                                                          \
 }
 
+__global__ void permute_vector_kernel(Index n, const Float* in, Float* out, const Index* P) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = in[P[i]];
+}
+
+__global__ void inv_permute_vector_kernel(Index n, const Float* in, Float* out, const Index* P) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[P[i]] = in[i];
+}
+
 __global__ void compute_M_numerics_kernel(
     Index m, Index n,
     const Index* M_row_ptrs, const Index* M_col_indices, Float* M_values,
@@ -61,6 +71,74 @@ __global__ void compute_M_numerics_kernel(
             }
         }
         M_values[p] = sum;
+    }
+}
+
+__global__ void cholesky_level_kernel(
+    Index num_nodes, const Index* level_nodes,
+    const Index* M_row_ptrs, const Index* M_col_indices, const Float* M_vals,
+    const Index* L_row_ptrs, const Index* L_col_indices, Float* L_vals,
+    int* error_flag
+) {
+    Index idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_nodes) return;
+    
+    Index i = level_nodes[idx];
+    
+    Index L_start = L_row_ptrs[i];
+    Index L_end = L_row_ptrs[i + 1];
+    Index M_ptr = M_row_ptrs[i];
+    Index M_end = M_row_ptrs[i + 1];
+    
+    for (Index p = L_start; p < L_end; ++p) {
+        Index j = L_col_indices[p];
+        
+        Float m_val = 0.0;
+        while (M_ptr < M_end && M_col_indices[M_ptr] < j) M_ptr++;
+        if (M_ptr < M_end && M_col_indices[M_ptr] == j) {
+            m_val = M_vals[M_ptr];
+        }
+        
+        if (j == i) {
+            Float sum = m_val;
+            for (Index k_ptr = L_start; k_ptr < p; ++k_ptr) {
+                Float lik = L_vals[k_ptr];
+                sum -= lik * lik;
+            }
+            if (sum <= 0.0) {
+                atomicAdd(error_flag, 1);
+                L_vals[p] = 1.0; // dummy to prevent division by zero for other threads
+            } else {
+                L_vals[p] = sqrt(sum);
+            }
+        } else {
+            Float sum = m_val;
+            
+            // Sparse dot product
+            Index ptr_i = L_start;
+            Index ptr_j = L_row_ptrs[j];
+            Index end_j = L_row_ptrs[j + 1];
+            
+            while (ptr_i < p && ptr_j < end_j) {
+                Index col_i = L_col_indices[ptr_i];
+                Index col_j = L_col_indices[ptr_j];
+                if (col_i >= j || col_j >= j) break;
+                
+                if (col_i == col_j) {
+                    sum -= L_vals[ptr_i] * L_vals[ptr_j];
+                    ptr_i++;
+                    ptr_j++;
+                } else if (col_i < col_j) {
+                    ptr_i++;
+                } else {
+                    ptr_j++;
+                }
+            }
+            
+            Index diag_ptr_j = end_j - 1;
+            Float l_jj = L_vals[diag_ptr_j];
+            L_vals[p] = sum / l_jj;
+        }
     }
 }
 
@@ -135,6 +213,38 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     // 5. Allocate intermediate vectors
     d_z_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     
+        // 6. Compute elimination tree levels for parallel GPU scheduling
+    std::vector<Index> level(m_, 0);
+    Index max_level = 0;
+    for (Index i = 0; i < m_; ++i) {
+        if (sym.parent[i] != -1) {
+            level[sym.parent[i]] = std::max(level[sym.parent[i]], level[i] + 1);
+        }
+        max_level = std::max(max_level, level[i]);
+    }
+    num_levels_ = max_level + 1;
+    
+    std::vector<std::vector<Index>> level_nodes(num_levels_);
+    for (Index i = 0; i < m_; ++i) {
+        level_nodes[level[i]].push_back(i);
+    }
+    
+    level_ptrs_.assign(num_levels_ + 1, 0);
+    std::vector<Index> host_level_nodes;
+    for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+        level_ptrs_[lvl] = host_level_nodes.size();
+        for (Index node : level_nodes[lvl]) {
+            host_level_nodes.push_back(node);
+        }
+    }
+    level_ptrs_[num_levels_] = host_level_nodes.size();
+    
+    size_t level_nodes_bytes = host_level_nodes.size() * sizeof(Index);
+    d_level_nodes_ = static_cast<Index*>(arena_.allocate(level_nodes_bytes));
+    CHECK_CUDA(cudaMemcpy(d_level_nodes_, host_level_nodes.data(), level_nodes_bytes, cudaMemcpyHostToDevice));
+    
+    d_factorization_error_ = static_cast<int*>(arena_.allocate(sizeof(int)));
+
     // Initialize cuSPARSE and descriptors
     initialize_cusparse();
 }
@@ -241,11 +351,33 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize(
     arena_.free(d_Theta);
 
     // 2. Cholesky numerical factorization (M = LL^T)
-    // [B] Engineering Decision: Full supernodal GPU-resident sparse Cholesky requires 
-    // a massive elimination tree and dense supernode block scheduler, or the NVIDIA cuDSS 
-    // library (unavailable in standard CUDA Toolkit). cuSOLVER's sparse Cholesky is host-only.
-    // To strictly avoid faking it with CPU execution, we hit the defined structural blocker here.
-    throw std::runtime_error("BLOCKER: True GPU-resident supernodal sparse Cholesky is impossible without cuDSS or CPU fallback. Stopping at numerical M boundary.");
+    // [B] Engineering Decision: We implement a custom, exact, up-looking sparse Cholesky factorization
+    // executed entirely on the GPU. The symbolic elimination tree computes topological levels.
+    // Rows at the same topological level are processed in parallel via batched kernels, natively avoiding CPU fallback.
+    int h_error = 0;
+    CHECK_CUDA(cudaMemcpy(d_factorization_error_, &h_error, sizeof(int), cudaMemcpyHostToDevice));
+
+    for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+        Index num_nodes = level_ptrs_[lvl + 1] - level_ptrs_[lvl];
+        if (num_nodes == 0) continue;
+        
+        int lvl_threads = 256;
+        int lvl_blocks = (num_nodes + lvl_threads - 1) / lvl_threads;
+        
+        cholesky_level_kernel<<<lvl_blocks, lvl_threads>>>(
+            num_nodes, d_level_nodes_ + level_ptrs_[lvl],
+            d_M_row_ptrs_, d_M_col_indices_, d_M_vals_,
+            d_L_row_ptrs_, d_L_col_indices_, d_L_vals_,
+            d_factorization_error_
+        );
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    CHECK_CUDA(cudaMemcpy(&h_error, d_factorization_error_, sizeof(int), cudaMemcpyDeviceToHost));
+    if (h_error > 0) {
+        throw std::runtime_error("Numerical factorization failed: matrix is not positive definite.");
+    }
 }
 
 void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
@@ -253,40 +385,44 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
         throw std::invalid_argument("rhs dimension mismatch");
     }
 
-    Float* d_rhs = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-    CHECK_CUDA(cudaMemcpy(d_rhs, rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
-    
+    Float* d_rhs_orig = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+    Float* d_rhs_perm = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+
+    CHECK_CUDA(cudaMemcpy(d_rhs_orig, rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
+
+    int threads = 256;
+    int blocks = (m_ + threads - 1) / threads;
+
+    // Permute RHS: P[i] = orig_i, so permuted[i] = orig[P[i]]
+    permute_vector_kernel<<<blocks, threads>>>(m_, d_rhs_orig, d_rhs_perm, d_P_);
+    CHECK_CUDA(cudaGetLastError());
+
     // Create dense vector descriptors
     cusparseDnVecDescr_t vec_r, vec_z, vec_dy;
-    
     Float alpha = 1.0;
-    
-    // 1. Forward solve: L z = r
-    // P_inv permutation was already applied to M conceptually, so rhs must be permuted.
-    // Wait, the API doesn't specify passing P here. If rhs is already permuted by the caller,
-    // we just solve. For the test, we'll assume rhs is permuted.
-    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_r, m_, d_rhs, CUDA_R_64F));
+
+    // 1. Forward solve: L z = r (working on permuted RHS)
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_r, m_, d_rhs_perm, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_z, m_, d_z_, CUDA_R_64F));
-    
+
     CHECK_CUSPARSE(cusparseSpSV_analysis(
         handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
         &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F,
         CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
-        
+
     CHECK_CUSPARSE(cusparseSpSV_solve(
         handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
         &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F,
         CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-        
+
     // 2. Backward solve: L^T \Delta y = z
-    // We can overwrite d_rhs with \Delta y.
-    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_dy, m_, d_rhs, CUDA_R_64F));
-    
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_dy, m_, d_rhs_perm, CUDA_R_64F));
+
     CHECK_CUSPARSE(cusparseSpSV_analysis(
         handle_, CUSPARSE_OPERATION_TRANSPOSE,
         &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F,
         CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
-        
+
     CHECK_CUSPARSE(cusparseSpSV_solve(
         handle_, CUSPARSE_OPERATION_TRANSPOSE,
         &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F,
@@ -294,9 +430,15 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
-    arena_.free(d_rhs);
-    
+    // Inverse permute \Delta y back to original ordering
+    inv_permute_vector_kernel<<<blocks, threads>>>(m_, d_rhs_perm, d_rhs_orig, d_P_);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs_orig, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    arena_.free(d_rhs_perm);
+    arena_.free(d_rhs_orig);
+
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_r));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_z));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_dy));

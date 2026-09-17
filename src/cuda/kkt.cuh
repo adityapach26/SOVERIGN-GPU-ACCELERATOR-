@@ -92,6 +92,11 @@ private:
     // Device pointers for permutations
     Index* d_P_;
 
+    Index num_levels_;
+    std::vector<Index> level_ptrs_;
+    Index* d_level_nodes_;
+    int* d_factorization_error_;
+
     // cuSPARSE Context and Descriptors
     cusparseHandle_t handle_;
     cusparseSpMatDescr_t descr_L_;

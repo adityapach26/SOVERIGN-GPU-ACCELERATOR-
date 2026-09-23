@@ -21,18 +21,16 @@ static void check_cuda_test_error(cudaError_t err, const char* msg) {
 
 TEST_CASE("Pre-Phase 13.1 Foundation 0 - DeviceSparseLU Representation", "[cuda][sparse_lu]") {
     // 1. Construct a small nontrivial matrix and basis
-    core::CSCMatrix A;
-    A.rows = 4;
-    A.cols = 4;
-    
-    // Nontrivial 4x4 matrix
     // [  1   2   0   0 ]
     // [  0   3   4   0 ]
     // [  0   0   5   6 ]
     // [  7   0   0   8 ]
-    A.col_ptrs = {0, 2, 4, 6, 8};
-    A.row_indices = {0, 3,  0, 1,  1, 2,  2, 3};
-    A.values =      {1.0, 7.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0};
+    core::CSCMatrix A(
+        4, 4,
+        {1.0, 7.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0}, // vals
+        {0, 3,  0, 1,  1, 2,  2, 3}, // rows_idx
+        {0, 2, 4, 6, 8} // col_ptrs
+    );
 
     simplex::Basis basis;
     basis.col_status.resize(4, simplex::BasisStatus::AtLower);

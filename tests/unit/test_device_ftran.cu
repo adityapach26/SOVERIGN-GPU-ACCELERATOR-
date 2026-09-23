@@ -42,17 +42,16 @@ __global__ void execute_device_update_kernel(
 
 TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
     // 1. Construct non-trivial matrix and basis
-    core::CSCMatrix A;
-    A.rows = 4;
-    A.cols = 4;
-    
     // [  1   2   0   0 ]
     // [  0   3   4   0 ]
     // [  0   0   5   6 ]
     // [  7   0   0   8 ]
-    A.col_ptrs = {0, 2, 4, 6, 8};
-    A.row_indices = {0, 3,  0, 1,  1, 2,  2, 3};
-    A.values =      {1.0, 7.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0};
+    core::CSCMatrix A(
+        4, 4,
+        {1.0, 7.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0}, // vals
+        {0, 3,  0, 1,  1, 2,  2, 3}, // rows_idx
+        {0, 2, 4, 6, 8} // col_ptrs
+    );
 
     simplex::Basis basis;
     basis.col_status.resize(4, simplex::BasisStatus::AtLower);

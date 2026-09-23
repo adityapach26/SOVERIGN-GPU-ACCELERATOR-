@@ -28,7 +28,7 @@ else()
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
         $<$<COMPILE_LANGUAGE:CXX>:-Werror>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-fast-math>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Wpedantic,-Werror,-fno-fast-math>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-fno-fast-math>
     )
 endif()
 

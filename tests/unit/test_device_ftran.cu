@@ -7,16 +7,8 @@
 #include "core/sparse_matrix.hpp"
 #include "simplex/basis.hpp"
 #include <vector>
-#include <iostream>
 
 using namespace sankhya;
-
-static void check_cuda_error(cudaError_t err, const char* msg) {
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string(msg) + ": " + cudaGetErrorString(err));
-    }
-}
-
 
 // Test kernel wrapper to execute device FTRAN/BTRAN
 __global__ void execute_device_ftran_kernel(
@@ -204,42 +196,18 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
         cudaMemcpy(tiny_ws.work_vec, d_q.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
 
         bool* d_success = static_cast<bool*>(arena.allocate(sizeof(bool)));
-        
-        Index host_num_eta_cols = -1;
-        cudaMemcpy(&host_num_eta_cols, tiny_ws.num_eta_cols, sizeof(Index), cudaMemcpyDeviceToHost);
-
-        std::cout << "--- DIAGNOSTICS ---\n";
-        std::cout << "tiny_ws.work_vec: " << tiny_ws.work_vec << "\n";
-        std::cout << "tiny_ws.num_eta_cols: " << tiny_ws.num_eta_cols << "\n";
-        std::cout << "tiny_ws.error_code: " << tiny_ws.error_code << "\n";
-        std::cout << "d_success: " << d_success << "\n";
-        std::cout << "tiny_ws.eta_vals: " << tiny_ws.eta_vals << "\n";
-        std::cout << "tiny_ws.eta_rows: " << tiny_ws.eta_rows << "\n";
-        std::cout << "tiny_ws.eta_pivot_row: " << tiny_ws.eta_pivot_row << "\n";
-        std::cout << "tiny_ws.eta_col_capacity: " << tiny_ws.eta_col_capacity << "\n";
-        std::cout << "tiny_ws.eta_capacity: " << tiny_ws.eta_capacity << "\n";
-        std::cout << "*tiny_ws.num_eta_cols: " << host_num_eta_cols << "\n";
-        std::cout << "-------------------\n";
-
         execute_device_update_kernel<<<1, 32>>>(tiny_ws, 1, 4, tiny_ws.work_vec, d_success);
-        check_cuda_error(cudaGetLastError(), "execute_device_update_kernel launch");
-        check_cuda_error(cudaDeviceSynchronize(), "execute_device_update_kernel execution");
+        cudaDeviceSynchronize();
 
         bool h_success = true;
-        check_cuda_error(
-            cudaMemcpy(&h_success, d_success, sizeof(bool), cudaMemcpyDeviceToHost),
-            "copy d_success"
-        );
+        cudaMemcpy(&h_success, d_success, sizeof(bool), cudaMemcpyDeviceToHost);
         
         // 1. Must return false
         REQUIRE(h_success == false);
 
         // 2. Must set error code 3
         int h_error = 0;
-        check_cuda_error(
-            cudaMemcpy(&h_error, tiny_ws.error_code, sizeof(int), cudaMemcpyDeviceToHost),
-            "copy error_code"
-        );
+        cudaMemcpy(&h_error, tiny_ws.error_code, sizeof(int), cudaMemcpyDeviceToHost);
         REQUIRE(h_error == 3);
 
         // 3. Verify failed update does NOT mutate metadata

@@ -228,5 +228,6 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
 
     hbf_manager.free_working_state(ws);
     manager.free_all();
+    hbf_manager.free_all_nodes();
     REQUIRE(arena.occupancy_percentage() == 0);
 }

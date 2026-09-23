@@ -29,7 +29,8 @@ __device__ void device_dual_simplex_iteration_loop(
     }
     __syncthreads();
 
-    for (Index iter = 0; iter < max_iterations; ++iter) {
+    Index current_iter = 0;
+    for (; current_iter < max_iterations; ++current_iter) {
         
         // -------------------------------------------------------------
         // 1. Leaving variable selection (Primal infeasibility)
@@ -201,14 +202,10 @@ __device__ void device_dual_simplex_iteration_loop(
     if (threadIdx.x == 0) {
         *status_out = status_shared;
         if (iter_count_out != nullptr) {
-            *iter_count_out = iter;
+            *iter_count_out = current_iter;
         }
     }
 }
-
-} // namespace gpu
-} // namespace sankhya
-
 
 __global__ void dual_simplex_kernel(
     DeviceModel model,
@@ -222,3 +219,6 @@ __global__ void dual_simplex_kernel(
     if (blockIdx.x != 0) return;
     device_dual_simplex_iteration_loop(model, lu, ws, obj_sign, max_iterations, status_out, iter_count_out);
 }
+
+} // namespace gpu
+} // namespace sankhya

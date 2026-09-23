@@ -7,6 +7,7 @@
 #include "core/sparse_matrix.hpp"
 #include "simplex/basis.hpp"
 #include <vector>
+#include <iostream>
 
 using namespace sankhya;
 

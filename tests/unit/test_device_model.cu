@@ -69,9 +69,9 @@ TEST_CASE("DeviceModel - Immutable Problem Upload", "[gpu][device_model]") {
 
     // 5. Explicitly verify device pointers are valid and contain exact data via cudaMemcpy (Device-to-Host)
     // CSC arrays
-    std::vector<Index> h_col_ptrs(model.cols + 1);
-    REQUIRE(cudaMemcpy(h_col_ptrs.data(), d_model.col_ptrs, (model.cols + 1) * sizeof(Index), cudaMemcpyDeviceToHost) == cudaSuccess);
-    for (Index j = 0; j <= model.cols; ++j) {
+    std::vector<Index> h_col_ptrs(model.A.cols + 1);
+    REQUIRE(cudaMemcpy(h_col_ptrs.data(), d_model.col_ptrs, (model.A.cols + 1) * sizeof(Index), cudaMemcpyDeviceToHost) == cudaSuccess);
+    for (Index j = 0; j <= model.A.cols; ++j) {
         REQUIRE(h_col_ptrs[j] == model.A.col_ptrs[j]);
     }
 
@@ -86,15 +86,15 @@ TEST_CASE("DeviceModel - Immutable Problem Upload", "[gpu][device_model]") {
     }
 
     // Objective & Bounds
-    std::vector<Float> h_obj(model.cols);
-    std::vector<Float> h_lb(model.cols);
-    std::vector<Float> h_ub(model.cols);
+    std::vector<Float> h_obj(model.A.cols);
+    std::vector<Float> h_lb(model.A.cols);
+    std::vector<Float> h_ub(model.A.cols);
     
-    REQUIRE(cudaMemcpy(h_obj.data(), d_model.obj, model.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
-    REQUIRE(cudaMemcpy(h_lb.data(), d_model.lb, model.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
-    REQUIRE(cudaMemcpy(h_ub.data(), d_model.ub, model.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
+    REQUIRE(cudaMemcpy(h_obj.data(), d_model.obj, model.A.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
+    REQUIRE(cudaMemcpy(h_lb.data(), d_model.lb, model.A.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
+    REQUIRE(cudaMemcpy(h_ub.data(), d_model.ub, model.A.cols * sizeof(Float), cudaMemcpyDeviceToHost) == cudaSuccess);
     
-    for (Index j = 0; j < model.cols; ++j) {
+    for (Index j = 0; j < model.A.cols; ++j) {
         REQUIRE(h_obj[j] == model.obj[j]);
         REQUIRE(h_lb[j] == model.lb[j]);
         REQUIRE(h_ub[j] == model.ub[j]);

@@ -23,11 +23,12 @@ if(MSVC)
     )
 else()
     add_compile_options(
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Werror
-        -fno-fast-math
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Werror>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-fast-math>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Wpedantic,-Werror,-fno-fast-math>
     )
 endif()
 

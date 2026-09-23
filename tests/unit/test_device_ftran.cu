@@ -192,7 +192,7 @@ TEST_CASE("Pre-Phase 13.1 Foundation A - Device FTRAN/BTRAN", "[cuda][ftran]") {
         cudaMemcpy(tiny_ws.eta_nnz, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
         cudaMemcpy(tiny_ws.eta_col_starts, &zero_idx, sizeof(Index), cudaMemcpyHostToDevice);
 
-        std::vector<Float> d_q = {0.5, 0.0, 1.5, -0.5}; // Non-trivial d_q
+        std::vector<Float> d_q = {0.5, 1.0, 1.5, -0.5}; // Non-trivial d_q
         cudaMemcpy(tiny_ws.work_vec, d_q.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
 
         bool* d_success = static_cast<bool*>(arena.allocate(sizeof(bool)));

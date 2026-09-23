@@ -11,40 +11,19 @@
 
 using namespace sankhya;
 
-__global__ void run_gpu_dual_simplex(
-    gpu::DeviceModel model,
-    gpu::DeviceSparseLU lu,
-    gpu::WorkingBasisState ws,
-    Float obj_sign,
-    Index max_iter,
-    gpu::DeviceSimplexStatus* status_out,
-    Index* iter_out
-) {
-    gpu::dual_simplex_kernel(model, lu, ws, obj_sign, max_iter, status_out, iter_out);
-}
 
 TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Mathematically Certified Pivot Certificate", "[cuda][dual]") {
     core::Model host_model;
     host_model.sense = OptimizationSense::Minimize;
-    host_model.rows = 2;
-    host_model.cols = 4;
-    host_model.nnz = 7;
+    host_model.add_variable(4.0, 0.0, 1e30);
+    host_model.add_variable(5.0, 0.0, 1e30);
+    host_model.add_variable(0.0, 0.0, 1e30);
+    host_model.add_variable(0.0, 0.0, 1e30);
     
-    // Nontrivial Mathematically Certified LP:
-    // Min z = 4x1 + 5x2
-    // -3x1 - 3x2 + s1 + s2 = -6
-    // -2x1 - 1x2 + 0  + s2 = -3
+    host_model.add_constraint({0, 1, 2, 3}, {-3.0, -3.0, 1.0, 1.0}, -6.0);
+    host_model.add_constraint({0, 1, 3}, {-2.0, -1.0, 1.0}, -3.0);
     
-    host_model.A.rows = 2;
-    host_model.A.cols = 4;
-    host_model.A.col_ptrs = {0, 2, 4, 5, 7};
-    host_model.A.row_indices = {0, 1, 0, 1, 0, 0, 1};
-    host_model.A.values = {-3.0, -2.0, -3.0, -1.0, 1.0, 1.0, 1.0};
-    
-    host_model.obj = {4.0, 5.0, 0.0, 0.0};
-    host_model.lb = {0.0, 0.0, 0.0, 0.0};
-    host_model.ub = {1e30, 1e30, 1e30, 1e30};
-    host_model.rhs = {-6.0, -3.0};
+    host_model.finalize();
     
     simplex::Basis host_basis;
     host_basis.col_status = {simplex::BasisStatus::AtLower, simplex::BasisStatus::AtLower,
@@ -103,14 +82,14 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Mathematically Certified Pivot Cert
     cudaMemcpy(ws.basis_indices, host_basis.basic_indices.data(), 2 * sizeof(Index), cudaMemcpyHostToDevice);
     cudaMemcpy(ws.x, host_x.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
     
-    std::vector<bool> host_is_basic(4, false);
-    for (Index b : host_basis.basic_indices) host_is_basic[b] = true;
+    std::vector<uint8_t> host_is_basic(4, 0);
+    for (Index b : host_basis.basic_indices) host_is_basic[b] = 1;
     cudaMemcpy(ws.is_basic, host_is_basic.data(), 4 * sizeof(bool), cudaMemcpyHostToDevice);
 
     gpu::DeviceSimplexStatus* d_status = static_cast<gpu::DeviceSimplexStatus*>(arena.allocate(sizeof(gpu::DeviceSimplexStatus)));
     Index* d_iter = static_cast<Index*>(arena.allocate(sizeof(Index)));
 
-    run_gpu_dual_simplex<<<1, 32>>>(d_model, d_lu, ws, 1.0, 100, d_status, d_iter);
+    gpu::dual_simplex_kernel<<<1, 32>>>(d_model, d_lu, ws, 1.0, 100, d_status, d_iter);
     cudaDeviceSynchronize();
 
     gpu::DeviceSimplexStatus h_status = gpu::DeviceSimplexStatus::IterationLimit;
@@ -150,12 +129,12 @@ TEST_CASE("Pre-Phase 13.1 GPU Dual Simplex - Mathematically Certified Pivot Cert
     std::vector<Index> gpu_basis_indices(2);
     cudaMemcpy(gpu_basis_indices.data(), ws.basis_indices, 2 * sizeof(Index), cudaMemcpyDeviceToHost);
 
-    std::vector<bool> gpu_is_basic(4);
+    std::vector<uint8_t> gpu_is_basic(4);
     cudaMemcpy(gpu_is_basic.data(), ws.is_basic, 4 * sizeof(bool), cudaMemcpyDeviceToHost);
 
     for (Index i = 0; i < 2; ++i) {
         Index b_idx = cpu_basis.basic_indices[i];
-        REQUIRE(gpu_is_basic[b_idx] == true);
+        REQUIRE(gpu_is_basic[b_idx] == 1);
         REQUIRE(gpu_basis_indices[i] == b_idx);
     }
 

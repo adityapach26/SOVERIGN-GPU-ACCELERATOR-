@@ -14,25 +14,15 @@ using namespace sankhya;
 TEST_CASE("Phase 13.1 Batched Sibling-Node Dual Simplex - Certified Corrective Fix", "[cuda][dual][batching]") {
     core::Model host_model;
     host_model.sense = OptimizationSense::Minimize;
-    host_model.rows = 2;
-    host_model.cols = 4;
-    host_model.nnz = 7;
+    host_model.add_variable(4.0, 0.0, 1e30);
+    host_model.add_variable(5.0, 0.0, 1e30);
+    host_model.add_variable(0.0, 0.0, 1e30);
+    host_model.add_variable(0.0, 0.0, 1e30);
     
-    // Nontrivial Mathematically Certified LP:
-    // Min z = 4x1 + 5x2
-    // -3x1 - 3x2 + s1 + s2 = -6
-    // -2x1 - 1x2 + 0  + s2 = -3
+    host_model.add_constraint({0, 1, 2, 3}, {-3.0, -3.0, 1.0, 1.0}, -6.0);
+    host_model.add_constraint({0, 1, 3}, {-2.0, -1.0, 1.0}, -3.0);
     
-    host_model.A.rows = 2;
-    host_model.A.cols = 4;
-    host_model.A.col_ptrs = {0, 2, 4, 5, 7};
-    host_model.A.row_indices = {0, 1, 0, 1, 0, 0, 1};
-    host_model.A.values = {-3.0, -2.0, -3.0, -1.0, 1.0, 1.0, 1.0};
-    
-    host_model.obj = {4.0, 5.0, 0.0, 0.0};
-    host_model.lb = {0.0, 0.0, 0.0, 0.0}; // Base unscaled lower bounds
-    host_model.ub = {1e30, 1e30, 1e30, 1e30};
-    host_model.rhs = {-6.0, -3.0};
+    host_model.finalize();
     
     simplex::Basis host_basis;
     host_basis.col_status = {simplex::BasisStatus::AtLower, simplex::BasisStatus::AtLower,
@@ -97,7 +87,7 @@ TEST_CASE("Phase 13.1 Batched Sibling-Node Dual Simplex - Certified Corrective F
         cudaMemcpy(ws.x, valid_host_x.data(), 4 * sizeof(Float), cudaMemcpyHostToDevice);
 
         // Both nodes share the same initial basis structure for this test
-        std::vector<bool> host_is_basic = {false, false, true, true};
+        std::vector<uint8_t> host_is_basic = {0, 0, 1, 1};
         cudaMemcpy(ws.is_basic, host_is_basic.data(), 4 * sizeof(bool), cudaMemcpyHostToDevice);
 
         h_ws_array.push_back(ws);

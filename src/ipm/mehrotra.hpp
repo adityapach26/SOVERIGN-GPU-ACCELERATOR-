@@ -2,12 +2,13 @@
 
 #include "core/problem.hpp"
 #include "sankhya/types.hpp"
+#include "simplex/primal.hpp"
 
 namespace sankhya {
 namespace ipm {
 
 struct MehrotraResult {
-    SimplexStatus status;
+    simplex::SimplexStatus status;
     Float objective_value;
     Index iterations;
     Float primal_residual;

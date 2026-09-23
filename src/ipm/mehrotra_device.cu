@@ -425,7 +425,7 @@ private:
 
 MehrotraResult MehrotraSolver::Impl::solve() {
     MehrotraResult result;
-    result.status = SimplexStatus::Optimal;
+    result.status = simplex::SimplexStatus::Optimal;
     result.iterations = 0;
 
     // Initialize: x = 1, s = 1, y = 0
@@ -444,7 +444,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         if (norm_rp < math::kDefaultFeasibilityTol &&
             norm_rd < math::kDefaultFeasibilityTol &&
             mu      < math::kDefaultFeasibilityTol) {
-            result.status          = SimplexStatus::Optimal;
+            result.status          = simplex::SimplexStatus::Optimal;
             result.iterations      = iter;
             result.primal_residual = norm_rp;
             result.dual_residual   = norm_rd;
@@ -524,7 +524,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     // Iteration limit
     compute_residuals();
     cudaDeviceSynchronize();
-    result.status          = SimplexStatus::IterationLimit;
+    result.status          = simplex::SimplexStatus::IterationLimit;
     result.iterations      = max_iter;
     result.primal_residual = kernels::compute_norm(m_, d_rp_);
     result.dual_residual   = kernels::compute_norm(n_, d_rd_);

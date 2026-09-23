@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 
 using namespace sankhya;
+using sankhya::simplex::SimplexStatus;
 
 TEST_CASE("Phase 15.2: GPU Mehrotra Predictor-Corrector IPM", "[cuda][ipm]") {
     // Construct a verified textbook LP

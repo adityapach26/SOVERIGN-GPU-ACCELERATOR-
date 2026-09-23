@@ -20,14 +20,24 @@ if(SANKHYA_ENABLE_CUDA)
     target_sources(sankhya_core PRIVATE
         gpu/vram_arena.cu
         gpu/device_sparse_lu.cu
+        gpu/device_ftran.cu
         gpu/device_dual_simplex.cu
-    gpu/batched_dual_simplex.cu
+        gpu/batched_dual_simplex.cu
         gpu/device_model.cu
         gpu/hbf.cu
         cuda/pricing.cu
         cuda/ratio_test.cu
         cuda/kkt.cu
         ipm/mehrotra_device.cu
+    )
+
+    # Enable CUDA Separable Compilation (relocatable device code, -rdc=true).
+    # This is required so that __device__ functions defined in one .cu translation
+    # unit (e.g. device_ftran.cu, device_dual_simplex.cu) can be called from
+    # other .cu translation units (e.g. batched_dual_simplex.cu, mehrotra_device.cu).
+    # Without this, the CUDA device linker cannot resolve cross-TU device symbols.
+    set_target_properties(sankhya_core PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
     )
 endif()
 

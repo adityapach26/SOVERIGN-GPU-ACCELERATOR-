@@ -196,3 +196,4 @@ __device__ bool device_update_basis(
 
 } // namespace gpu
 } // namespace sankhya
+

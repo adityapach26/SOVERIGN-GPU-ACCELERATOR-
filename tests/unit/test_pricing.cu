@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <catch2/catch_test_macros.hpp>
 #include <cuda_runtime.h>
 #include "cuda/pricing.cuh"
@@ -13,7 +14,7 @@ TEST_CASE("Step 12.1 Warp-Synchronous Devex Pricing Kernel (Source Fidelity)", "
     
     std::vector<Float> h_rc(n, 0.0);
     std::vector<Float> h_weight(n, 1.0);
-    std::vector<bool> h_eligible(n, true);
+    std::vector<uint8_t> h_eligible(n, true);
     
     // TEST 1 — BASIC MAXIMUM
     h_rc[42] = 10.0;

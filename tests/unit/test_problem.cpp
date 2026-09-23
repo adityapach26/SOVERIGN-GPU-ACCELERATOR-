@@ -1,3 +1,4 @@
+#include <vector>
 /**
  * @file test_problem.cpp
  * @brief Unit tests for the LP data model (Phase 3, Step 3.1)

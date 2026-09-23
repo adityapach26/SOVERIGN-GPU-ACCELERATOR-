@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <vector>
+#include <utility>
 /**
  * @file sparse_matrix.cpp
  * @brief Compressed Sparse Column (CSC) matrix implementation

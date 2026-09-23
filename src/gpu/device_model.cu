@@ -1,3 +1,4 @@
+#include <cstddef>
 /**
  * @file device_model.cu
  * @brief Immutable Device-Resident Problem State Implementation (Step 10.1)

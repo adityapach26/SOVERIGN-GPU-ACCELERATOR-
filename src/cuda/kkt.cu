@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <string>
+#include <vector>
 #include <algorithm>
 #include "cuda/kkt.cuh"
 #include <stdexcept>

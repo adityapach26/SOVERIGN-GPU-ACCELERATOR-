@@ -1,3 +1,4 @@
+#include <cstddef>
 /**
  * @file test_device_model.cu
  * @brief Unit tests for Immutable Device-Resident Problem State (Step 10.1)

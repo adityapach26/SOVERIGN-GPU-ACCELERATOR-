@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <string>
 /**
  * @file vram_arena.cu
  * @brief CUDA Memory Pool / Persistent VRAM Arena implementation (Step 9.1)

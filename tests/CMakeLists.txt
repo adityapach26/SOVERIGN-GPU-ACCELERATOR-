@@ -53,4 +53,8 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_gpu_kkt.cu
         unit/test_mehrotra.cu
     )
+
+    set_target_properties(sankhya_unit_tests PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+    )
 endif()

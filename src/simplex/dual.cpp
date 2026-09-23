@@ -1,3 +1,4 @@
+#include <vector>
 /**
  * @file dual.cpp
  * @brief CPU Dual Simplex (Phase II) implementation

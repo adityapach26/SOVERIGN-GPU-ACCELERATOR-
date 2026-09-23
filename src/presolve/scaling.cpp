@@ -1,3 +1,4 @@
+#include <vector>
 /**
  * @file scaling.cpp
  * @brief Sovereign Presolve Pipeline - Ruiz Equilibrium Scaling implementation

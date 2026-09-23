@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "gpu/batched_dual_simplex.cuh"
 
 namespace sankhya {

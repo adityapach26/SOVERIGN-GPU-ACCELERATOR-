@@ -1,3 +1,4 @@
+#include <vector>
 /**
  * @file test_sparse_matrix.cpp
  * @brief Unit tests for the CSCMatrix sparse matrix representation

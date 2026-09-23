@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <vector>
 #include "gpu/device_sparse_lu.cuh"
 #include <stdexcept>
 #include <string>

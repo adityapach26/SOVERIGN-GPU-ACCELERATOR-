@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <vector>
 #include "ipm/symbolic.hpp"
 #include <algorithm>
 #include <stdexcept>

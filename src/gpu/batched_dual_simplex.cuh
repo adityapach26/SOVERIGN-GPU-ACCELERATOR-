@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include "sankhya/types.hpp"
 #include "gpu/device_model.cuh"
 #include "gpu/device_sparse_lu.cuh"

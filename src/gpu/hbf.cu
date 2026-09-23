@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <vector>
+#include <cstdint>
 /**
  * @file hbf.cu
  * @brief Hierarchical Basis Forest (HBF) Implementation (Step 11.1 & 11.2)

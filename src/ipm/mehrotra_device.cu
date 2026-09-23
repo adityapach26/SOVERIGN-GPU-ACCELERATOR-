@@ -1,3 +1,8 @@
+#include <cstddef>
+#include <string>
+#include <vector>
+#include <cstdint>
+#include <stdexcept>
 #include "ipm/mehrotra.hpp"
 #include "cuda/kkt.cuh"
 #include "gpu/vram_arena.cuh"

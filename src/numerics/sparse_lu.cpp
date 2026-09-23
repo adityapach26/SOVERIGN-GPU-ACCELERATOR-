@@ -1,3 +1,7 @@
+#include <cstddef>
+#include <vector>
+#include <limits>
+#include <utility>
 #include "sparse_lu.hpp"
 
 #include <algorithm>

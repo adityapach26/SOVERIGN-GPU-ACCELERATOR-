@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <utility>
 /**
  * @file test_sparse_lu.cpp
  * @brief Unit tests for SparseLUFactorization (Step 6.1 and 6.2)

@@ -1,3 +1,5 @@
+#include <vector>
+#include <utility>
 /**
  * @file problem.cpp
  * @brief Linear Program data model implementation

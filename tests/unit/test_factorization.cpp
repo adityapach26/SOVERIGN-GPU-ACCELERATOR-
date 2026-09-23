@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <utility>
+#include <memory>
 /**
  * @file test_factorization.cpp
  * @brief Unit tests for the BasisFactorization interface (Step 4.1)

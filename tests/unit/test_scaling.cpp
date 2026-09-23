@@ -1,3 +1,4 @@
+#include <cstddef>
 /**
  * @file test_scaling.cpp
  * @brief Unit tests for Sovereign Presolve Pipeline - Ruiz Equilibrium Scaling

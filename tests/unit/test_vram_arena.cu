@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <new>
+#include <stdexcept>
 /**
  * @file test_vram_arena.cu
  * @brief Unit tests for CUDA VRAM Arena

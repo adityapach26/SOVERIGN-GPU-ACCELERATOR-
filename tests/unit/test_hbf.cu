@@ -1,3 +1,6 @@
+#include <cmath>
+#include <utility>
+#include <stdexcept>
 /**
  * @file test_hbf.cu
  * @brief Unit tests for Hierarchical Basis Forest (Steps 11.1 & 11.2)

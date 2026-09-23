@@ -1,3 +1,4 @@
+#include <vector>
 /**
  * @file primal.cpp
  * @brief L0/L1/L2 CPU Primal Simplex (Phase II) implementation

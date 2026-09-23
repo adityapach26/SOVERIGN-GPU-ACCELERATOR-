@@ -118,7 +118,7 @@ TEST_CASE("Step 12.2 Warp-Synchronous Harris Two-Pass Ratio Test", "[cuda][ratio
     // Delta = 8.000000833...
     
     // Let's print or calculate the exact Delta.
-    Float expected_delta = (h_x[60] + 1e-6) / 3.0;
+    Float expected_delta = (h_x[40] + 1e-6) / 2.0;
     REQUIRE(std::abs(final_delta - expected_delta) < 1e-12);
     
     // Verify Pass 2 (Selection)

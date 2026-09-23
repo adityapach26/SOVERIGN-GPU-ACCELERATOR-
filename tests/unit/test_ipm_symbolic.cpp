@@ -39,10 +39,11 @@ TEST_CASE("Phase 14.1: IPM CPU Symbolic Phase and AMD Ordering", "[symbolic][ipm
     }
     
     // Requirement 7 & 8: 
-    // Minimum-degree heuristic should eliminate leaves (1, 2, 3, 4) before the center (0)
-    // to avoid O(V^2) fill-in clique creation.
-    // The tie-breaker prefers lowest index, so the order should be 1, 2, 3, 4, 0.
-    std::vector<Index> expected_P = {1, 2, 3, 4, 0};
+    // Minimum-degree heuristic eliminates leaves to avoid O(V^2) fill-in.
+    // Nodes 1, 2, 3 are eliminated first. This dynamically reduces the degree of the center node (0) to 1.
+    // At step 4, Nodes 0 and 4 both have degree 1. The tie-breaker strictly prefers the lowest index, so 0 beats 4.
+    // Therefore, the true elimination order is 1, 2, 3, 0, 4.
+    std::vector<Index> expected_P = {1, 2, 3, 0, 4};
     REQUIRE(P == expected_P);
     
     // Compute symbolic factorization
@@ -57,19 +58,21 @@ TEST_CASE("Phase 14.1: IPM CPU Symbolic Phase and AMD Ordering", "[symbolic][ipm
     
     // Requirement 6: Structural elimination
     // Since we used optimal AMD on a star graph, the fill-in should be exactly zero.
-    // L_pattern should have exactly 4 non-zeros (the edges 1-0, 2-0, 3-0, 4-0 in the permuted graph).
-    // In the permuted graph, original node 0 is now node 4.
-    // Nodes 0, 1, 2, 3 (which were 1, 2, 3, 4) all connect to node 4.
-    // So L_pattern (strictly lower triangular) has edges (4,0), (4,1), (4,2), (4,3).
+    // L_pattern should have exactly 4 non-zeros.
+    // In the permuted graph, original node 0 is now node 3.
+    // Original nodes 1, 2, 3 (permuted to 0, 1, 2) connect to permuted node 3.
+    // Original node 4 (permuted to 4) connects to permuted node 3.
+    // So L_pattern (strictly lower triangular) has edges (3,0), (3,1), (3,2), (4,3).
     Index nnz_L = sym.L_pattern.row_ptrs[5];
     REQUIRE(nnz_L == 4);
     
     // Let's verify the parent array (elimination tree)
-    // For j=0, 1, 2, 3, their only connection is to node 4, so parent is 4.
+    // For j=0, 1, 2, their only strictly lower connection is to node 3, so parent is 3.
+    // For j=3, its strictly lower connection is to node 4, so parent is 4.
     // For j=4 (root), parent is -1.
-    REQUIRE(sym.parent[0] == 4);
-    REQUIRE(sym.parent[1] == 4);
-    REQUIRE(sym.parent[2] == 4);
+    REQUIRE(sym.parent[0] == 3);
+    REQUIRE(sym.parent[1] == 3);
+    REQUIRE(sym.parent[2] == 3);
     REQUIRE(sym.parent[3] == 4);
     REQUIRE(sym.parent[4] == -1);
 }

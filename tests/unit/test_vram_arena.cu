@@ -29,7 +29,7 @@ TEST_CASE("VRAMArena - Construction and Initialization", "[gpu][vram_arena]") {
 }
 
 TEST_CASE("VRAMArena - Allocation and Free", "[gpu][vram_arena]") {
-    gpu::VRAMArena arena(1024 * 1024); // 1 MB
+    gpu::VRAMArena arena(1024 * 16); // 16 KB
     
     // Test 2 - Device allocation
     void* ptr = arena.allocate(1024);

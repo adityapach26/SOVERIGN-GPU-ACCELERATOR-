@@ -56,7 +56,7 @@ TEST_CASE("DeviceModel - Immutable Problem Upload", "[gpu][device_model]") {
     model.finalize();
     
     // 2. Initialize VRAMArena
-    gpu::VRAMArena arena(1024 * 1024); // 1 MB test arena
+    gpu::VRAMArena arena(1024 * 16); // 16 KB test arena
     std::size_t initial_occupancy = arena.occupancy_percentage();
     REQUIRE(initial_occupancy == 0);
 

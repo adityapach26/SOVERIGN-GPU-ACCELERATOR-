@@ -49,6 +49,7 @@ TEST_CASE("Phase 13.1 Batched Sibling-Node Dual Simplex - Certified Corrective F
     // Create Root Node (ID = 100)
     std::vector<gpu::BoundDelta> root_deltas;
     hbf_manager.create_node(100, 100, root_deltas);
+    hbf_manager.set_root_basis(host_basis.basic_indices);
 
     // Create Sibling 1 (ID = 101) - BoundDelta on x1
     std::vector<gpu::BoundDelta> child1_deltas = {{0, 5.0, 10.0}}; // Modifies lb of var 0 to 5.0

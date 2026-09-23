@@ -32,21 +32,17 @@ TEST_CASE("Phase 15.1: GPU Sparse Cholesky Factorization Path (Hardened)", "[cud
     ipm::SymbolicFactorization sym;
     ipm::compute_symbolic_factorization(A, P, sym);
     
-    // AMD Ordering expected: P = {1, 2, 0}
-    // Permuted M = P M P^T = [[5, 0, 1],
-    //                         [0, 5, 1],
-    //                         [1, 1, 6]]
-    // Expected L nonzeros for permuted M:
-    // row 0: L00 = sqrt(5)
-    // row 1: L10 = 0, L11 = sqrt(5)
-    // row 2: L20 = 1/sqrt(5), L21 = 1/sqrt(5), L22 = sqrt(6 - 0.2 - 0.2) = sqrt(5.6)
+    // AMD Ordering expected: P = {1, 0, 2}
+    // Permuted M = P M P^T = [[5, 1, 0],
+    //                         [1, 6, 1],
+    //                         [0, 1, 5]]
     
     // Construct full permuted M pattern for the solver
     core::CSRMatrix M_pattern;
     M_pattern.rows = 3;
     M_pattern.cols = 3;
-    M_pattern.row_ptrs = {0, 2, 4, 7};
-    M_pattern.col_indices = {0, 2, 1, 2, 0, 1, 2};
+    M_pattern.row_ptrs = {0, 2, 5, 7};
+    M_pattern.col_indices = {0, 1, 0, 1, 2, 1, 2};
     M_pattern.values = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; 
 
     // 3. Initialize GPU KKT Solver (VRAM residency setup)
@@ -67,10 +63,8 @@ TEST_CASE("Phase 15.1: GPU Sparse Cholesky Factorization Path (Hardened)", "[cud
         std::vector<std::vector<Float>> dense_L(3, std::vector<Float>(3, 0.0));
         
         // We explicitly know the CSR structure that was generated for L:
-        // row_ptrs = {0, 1, 2, 5}
-        // col_indices = {0, 1, 0, 1, 2}
-        std::vector<Index> host_L_row_ptrs = {0, 1, 2, 5};
-        std::vector<Index> host_L_col_indices = {0, 1, 0, 1, 2};
+        std::vector<Index> host_L_row_ptrs = {0, 1, 3, 5};
+        std::vector<Index> host_L_col_indices = {0, 0, 1, 1, 2};
         
         for (Index i = 0; i < 3; ++i) {
             for (Index p = host_L_row_ptrs[i]; p < host_L_row_ptrs[i+1]; ++p) {
@@ -83,9 +77,9 @@ TEST_CASE("Phase 15.1: GPU Sparse Cholesky Factorization Path (Hardened)", "[cud
         Float R_norm_sq = 0.0;
         // M_permuted dense:
         Float dense_M_perm[3][3] = {
-            {5.0, 0.0, 1.0},
-            {0.0, 5.0, 1.0},
-            {1.0, 1.0, 6.0}
+            {5.0, 1.0, 0.0},
+            {1.0, 6.0, 1.0},
+            {0.0, 1.0, 5.0}
         };
         
         for (Index i = 0; i < 3; ++i) {

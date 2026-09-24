@@ -40,7 +40,8 @@ public:
         Index max_iterations = 200;
     };
 
-    QPSolver(const Options& options = Options{}) : options_(options) {}
+    QPSolver() = default;
+    explicit QPSolver(const Options& options) : options_(options) {}
 
     /**
      * @brief Solves the given Quadratic Program
@@ -53,9 +54,9 @@ public:
      */
     QPSolverStatus solve(
         const QPModel& qp,
-        std::vector<Float>& x,
-        std::vector<Float>& y,
-        std::vector<Float>& z
+        std::vector<Float>& /*x*/,
+        std::vector<Float>& /*y*/,
+        std::vector<Float>& /*z*/
     ) {
         try {
             qp.validate();
@@ -85,3 +86,4 @@ private:
 
 } // namespace qp
 } // namespace sankhya
+

@@ -41,7 +41,7 @@ public:
     core::CSCMatrix H;
     QPConvexityStatus convexity = QPConvexityStatus::Unknown;
 
-    QPModel() = default;
+    QPModel() : H(0, 0, {}, {}, {0}) {}
 
     /**
      * @brief Validates dimensional and structural consistency of the QP.
@@ -76,3 +76,4 @@ public:
 
 } // namespace qp
 } // namespace sankhya
+

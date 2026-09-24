@@ -91,9 +91,13 @@ __global__ void purify_step_kernel(
     gpu::device_ftran(lu, ws, ws.d);
 
     __shared__ bool pivoted;
+    __shared__ Index shared_best_leave;
+    __shared__ bool shared_ok;
+
     if (threadIdx.x == 0) {
         pivoted = false;
-        Index best_leave = -1;
+        shared_best_leave = -1;
+        shared_ok = false;
         Float max_abs_d = 1e-7;
 
         for (Index i = 0; i < ws.m; ++i) {
@@ -101,27 +105,44 @@ __global__ void purify_step_kernel(
                 Float abs_d = std::abs(ws.d[i]);
                 if (abs_d > max_abs_d) {
                     max_abs_d = abs_d;
-                    best_leave = i;
+                    shared_best_leave = i;
                 }
-            }
-        }
-
-        if (best_leave != -1) {
-            bool ok = gpu::device_update_basis(ws, best_leave, q, d_Aq, 1e-7);
-            if (ok) {
-                ws.is_basic[q] = true;
-                pivoted = true;
-                *d_pivoted = true;
             }
         }
     }
     __syncthreads();
 
+    if (shared_best_leave != -1) {
+        bool ok = gpu::device_update_basis(ws, shared_best_leave, q, ws.d, 1e-7);
+        if (threadIdx.x == 0) {
+            shared_ok = ok;
+        }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0 && shared_ok) {
+        ws.is_basic[q] = true;
+        pivoted = true;
+        *d_pivoted = true;
+    }
+    __syncthreads();
+
+    __shared__ Index try_leave_row_1;
+    __shared__ Index try_leave_row_2;
+    __shared__ bool ok_1;
+    __shared__ bool ok_2;
+
+    // local to thread 0
+    Float max_theta_pos = 1e30;
+    Index pos_leave = -1;
+    Float max_theta_neg = 1e30;
+    Index neg_leave = -1;
+
     if (threadIdx.x == 0 && !pivoted) {
-        Float max_theta_pos = 1e30;
-        Index pos_leave = -1;
-        Float max_theta_neg = 1e30;
-        Index neg_leave = -1;
+        ok_1 = false;
+        ok_2 = false;
+        try_leave_row_1 = -1;
+        try_leave_row_2 = -1;
 
         Float dist_ub_q = model.ub[q] - ws.x[q];
         Float dist_lb_q = ws.x[q] - model.lb[q];
@@ -150,39 +171,58 @@ __global__ void purify_step_kernel(
             }
         }
         
-        Float chosen_theta = 0.0;
-        Index chosen_leave = -1;
-        bool pivot_success = false;
-
         if (pos_leave != -1 && pos_leave != q) {
             Index leave_row = -1;
             for (Index i = 0; i < ws.m; ++i) {
                 if (ws.basis_indices[i] == pos_leave) leave_row = i;
             }
             if (leave_row != -1 && std::abs(ws.d[leave_row]) > 1e-7) {
-                if (gpu::device_update_basis(ws, leave_row, q, d_Aq, 1e-7)) {
-                    chosen_theta = max_theta_pos;
-                    chosen_leave = pos_leave;
-                    pivot_success = true;
-                }
+                try_leave_row_1 = leave_row;
             }
         }
 
-        if (!pivot_success && neg_leave != -1 && neg_leave != q) {
+        if (neg_leave != -1 && neg_leave != q) {
             Index leave_row = -1;
             for (Index i = 0; i < ws.m; ++i) {
                 if (ws.basis_indices[i] == neg_leave) leave_row = i;
             }
             if (leave_row != -1 && std::abs(ws.d[leave_row]) > 1e-7) {
-                if (gpu::device_update_basis(ws, leave_row, q, d_Aq, 1e-7)) {
-                    chosen_theta = -max_theta_neg;
-                    chosen_leave = neg_leave;
-                    pivot_success = true;
-                }
+                try_leave_row_2 = leave_row;
             }
         }
+    }
+    __syncthreads();
 
-        if (!pivot_success && (pos_leave == q || neg_leave == q)) {
+    if (!pivoted) {
+        bool local_ok_1 = false;
+        if (try_leave_row_1 != -1) {
+            local_ok_1 = gpu::device_update_basis(ws, try_leave_row_1, q, ws.d, 1e-7);
+        }
+        if (threadIdx.x == 0) ok_1 = local_ok_1;
+        __syncthreads();
+
+        bool local_ok_2 = false;
+        if (try_leave_row_2 != -1 && !ok_1) {
+            local_ok_2 = gpu::device_update_basis(ws, try_leave_row_2, q, ws.d, 1e-7);
+        }
+        if (threadIdx.x == 0) ok_2 = local_ok_2;
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0 && !pivoted) {
+        Float chosen_theta = 0.0;
+        Index chosen_leave = -1;
+        bool pivot_success = false;
+
+        if (ok_1) {
+            chosen_theta = max_theta_pos;
+            chosen_leave = pos_leave;
+            pivot_success = true;
+        } else if (ok_2) {
+            chosen_theta = -max_theta_neg;
+            chosen_leave = neg_leave;
+            pivot_success = true;
+        } else if (pos_leave == q || neg_leave == q) {
             if (pos_leave == q) {
                 chosen_theta = max_theta_pos;
             } else {
@@ -246,24 +286,35 @@ __global__ void purify_bound_step_kernel(
 
     gpu::device_ftran(lu, ws, ws.d);
 
+    __shared__ Index shared_best_leave;
+    __shared__ bool shared_ok;
+
     if (threadIdx.x == 0) {
-        Index best_leave = -1;
+        shared_best_leave = -1;
+        shared_ok = false;
         Float max_abs_d = 1e-7;
         for (Index i = 0; i < ws.m; ++i) {
             if (ws.basis_indices[i] >= model.cols) {
                 Float abs_d = std::abs(ws.d[i]);
                 if (abs_d > max_abs_d) {
                     max_abs_d = abs_d;
-                    best_leave = i;
+                    shared_best_leave = i;
                 }
             }
         }
-        if (best_leave != -1) {
-            bool ok = gpu::device_update_basis(ws, best_leave, q, d_Aq, 1e-7);
-            if (ok) {
-                ws.is_basic[q] = true;
-            }
+    }
+    __syncthreads();
+
+    if (shared_best_leave != -1) {
+        bool ok = gpu::device_update_basis(ws, shared_best_leave, q, ws.d, 1e-7);
+        if (threadIdx.x == 0) {
+            shared_ok = ok;
         }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0 && shared_ok) {
+        ws.is_basic[q] = true;
     }
     __syncthreads();
 }

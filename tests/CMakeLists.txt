@@ -52,6 +52,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_ratio_test.cu
         unit/test_gpu_kkt.cu
         unit/test_mehrotra.cu
+        unit/test_crossover.cu
     )
 
     set_target_properties(sankhya_unit_tests PROPERTIES

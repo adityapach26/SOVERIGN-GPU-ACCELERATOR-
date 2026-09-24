@@ -29,6 +29,7 @@ if(SANKHYA_ENABLE_CUDA)
         cuda/ratio_test.cu
         cuda/kkt.cu
         ipm/mehrotra_device.cu
+        ipm/crossover.cu
     )
 
     # Enable CUDA Separable Compilation (relocatable device code, -rdc=true).

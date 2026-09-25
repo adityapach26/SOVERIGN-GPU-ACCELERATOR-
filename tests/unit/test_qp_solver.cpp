@@ -172,7 +172,7 @@ TEST_CASE("Phase 16A.2: Diagonal Convex QP", "[qp][solver]") {
         {1.0, 1.0},               // A
         {3.0},                     // b
         {0.0, 0.0},               // lb
-        {math::kInfinity, math::kInfinity}, // ub
+        {math::kInfinity, math::kInfinity} // ub
         );
 
     QPSolver solver;
@@ -213,7 +213,7 @@ TEST_CASE("Phase 16A.2: Coupled PSD QP", "[qp][solver]") {
         {1.0, 1.0},               // A
         {1.0},                     // b
         {0.0, 0.0},               // lb
-        {math::kInfinity, math::kInfinity}, // ub
+        {math::kInfinity, math::kInfinity} // ub
         );
 
     QPSolver solver;
@@ -251,7 +251,7 @@ TEST_CASE("Phase 16A.2: QP Active Bounds", "[qp][solver]") {
         {1.0, 1.0, 1.0},         // A
         {1.5},                     // b
         {0.0, 0.0, 0.0},         // lb
-        {1.0, 1.0, math::kInfinity}, // ub
+        {1.0, 1.0, math::kInfinity} // ub
         );
 
     QPSolver solver;

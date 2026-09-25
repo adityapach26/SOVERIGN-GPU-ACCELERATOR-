@@ -74,3 +74,4 @@ TEST_CASE("Phase 18.1: CPU Decision Logic - Mock Integrality and Bounds", "[milp
         REQUIRE(incumbent.get_obj() == 80.0); // Not updated
     }
 }
+

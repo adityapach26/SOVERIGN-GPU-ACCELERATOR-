@@ -10,7 +10,14 @@ namespace gpu {
     struct DeviceModel;
     struct DeviceSparseLU;
     class VRAMArena;
-    enum class DeviceSimplexStatus;
+    
+    // Explicitly redefine to avoid including CUDA headers (__global__) in CPU translation units
+    enum class DeviceSimplexStatus {
+        Optimal = 0,
+        Infeasible = 1,
+        IterationLimit = 2,
+        NumericalFailure = 3
+    };
 }
 
 namespace milp {

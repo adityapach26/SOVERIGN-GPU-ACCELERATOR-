@@ -10,7 +10,6 @@ add_library(sankhya_core
     presolve/scaling.cpp
     qp/qp_solver.cpp
     milp/tree.cpp
-        milp/node_solver.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC
@@ -33,6 +32,7 @@ if(SANKHYA_ENABLE_CUDA)
         cuda/kkt.cu
         ipm/mehrotra_device.cu
         ipm/crossover.cu
+        gpu/node_dispatch.cu
         milp/node_solver.cpp
     )
 

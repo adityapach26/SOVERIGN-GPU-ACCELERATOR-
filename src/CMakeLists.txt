@@ -9,6 +9,7 @@ add_library(sankhya_core
     ipm/symbolic.cpp
     presolve/scaling.cpp
     qp/qp_solver.cpp
+    milp/tree.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC

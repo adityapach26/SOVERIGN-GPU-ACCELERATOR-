@@ -56,6 +56,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_gpu_kkt.cu
         unit/test_mehrotra.cu
         unit/test_crossover.cu
+        unit/test_milp_node_solver.cpp
     )
 
     set_target_properties(sankhya_unit_tests PROPERTIES

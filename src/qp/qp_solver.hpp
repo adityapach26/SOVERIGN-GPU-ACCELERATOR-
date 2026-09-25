@@ -26,10 +26,23 @@ enum class QPSolverStatus {
 };
 
 /**
+ * @brief Detailed result from QP solver
+ */
+struct QPResult {
+    QPSolverStatus status = QPSolverStatus::InvalidModel;
+    Float objective_value = 0.0;
+    Index iterations = 0;
+    Float primal_residual = 0.0;
+    Float dual_residual = 0.0;
+    Float complementarity = 0.0;
+};
+
+/**
  * @brief Solver interface for Convex Quadratic Programs
  *
  * Implements the mathematical contract defined in ADR-QP-001.
- * This class establishes the API boundary and does NOT wrap external solvers.
+ * Uses the normal-equations reduction of the QP Newton system.
+ * This class does NOT wrap external solvers.
  */
 class QPSolver {
 public:
@@ -43,42 +56,19 @@ public:
     QPSolver() = default;
     explicit QPSolver(const Options& options) : options_(options) {}
 
-    /**
-     * @brief Solves the given Quadratic Program
-     *
-     * @param qp The quadratic program model
-     * @param x  On exit, the primal solution vector
-     * @param y  On exit, the dual solution vector for equality constraints
-     * @param z  On exit, the dual solution vector for variable bounds
-     * @return The solver termination status
-     */
     QPSolverStatus solve(
         const QPModel& qp,
-        std::vector<Float>& /*x*/,
-        std::vector<Float>& /*y*/,
-        std::vector<Float>& /*z*/
-    ) {
-        try {
-            qp.validate();
-        } catch (const std::invalid_argument&) {
-            if (qp.convexity == QPConvexityStatus::Nonconvex) {
-                return QPSolverStatus::UnsupportedNonconvex;
-            }
-            return QPSolverStatus::InvalidModel;
-        }
-        
-        if (qp.convexity == QPConvexityStatus::Unknown) {
-            // Note: In 16A.2, eigenvalue decomposition or LDLT inertia
-            // would dynamically check PSD status here.
-            // For 16A.1, if it's unknown we just return unsupported as a strict contract.
-            return QPSolverStatus::UnsupportedNonconvex;
-        }
+        std::vector<Float>& x,
+        std::vector<Float>& y,
+        std::vector<Float>& z
+    );
 
-        // Implementation of CPU KKT assembly and factorization
-        // is deferred to Step 16A.2.
-        
-        return QPSolverStatus::UnsupportedNonconvex;
-    }
+    QPResult solve_with_diagnostics(
+        const QPModel& qp,
+        std::vector<Float>& x,
+        std::vector<Float>& y,
+        std::vector<Float>& z
+    );
 
 private:
     Options options_;
@@ -86,4 +76,3 @@ private:
 
 } // namespace qp
 } // namespace sankhya
-

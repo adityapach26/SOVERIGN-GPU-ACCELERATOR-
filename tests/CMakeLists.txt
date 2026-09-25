@@ -25,6 +25,7 @@ add_executable(sankhya_unit_tests
     unit/test_scaling.cpp
     unit/test_ipm_symbolic.cpp
     unit/test_qp_contract.cpp
+    unit/test_qp_solver.cpp
 )
 
 # Link sankhya_core and Catch2 main entrypoint

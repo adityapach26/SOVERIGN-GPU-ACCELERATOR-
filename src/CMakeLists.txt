@@ -8,6 +8,7 @@ add_library(sankhya_core
     simplex/dual.cpp
     ipm/symbolic.cpp
     presolve/scaling.cpp
+    qp/qp_solver.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC

@@ -57,12 +57,16 @@ The solver termination tolerances reuse `math::kDefaultFeasibilityTol` and estab
 
 ### 6. CPU Reference Path
 **[C] ENGINEERING INFERENCE**: 
-The CPU reference path will construct the symmetric KKT system:
-```
-[ H   A^T ] [ dx ] = [ -r_d ]
-[ A   0   ] [ dy ] = [ -r_p ]
-```
-and reuse the existing project-owned `BasisFactorization` / IPM infrastructure. No external solvers (Gurobi, OSQP, HiGHS, etc.) will be wrapped or invoked. The actual algorithm implementation belongs to Step 16A.2.
+The CPU reference path uses the **normal-equations reduction** of the QP Newton system:
+1. Form the SPD matrix `W = H + D` where `D` is the positive barrier diagonal.
+2. Solve `W z = v` for right-hand sides via Cholesky factorization (SPD).
+3. Form the Schur complement `S = A W^{-1} A^T` (SPD).
+4. Solve `S Δy = rhs` via Cholesky factorization (SPD, reusing existing `GPUKKTCholeskySolver` architecture).
+5. Back-substitute for `Δx`.
+
+Both `W` and `S` are SPD (because `H` is PSD and `D > 0` for interior points), so only Cholesky factorization is required — no LDLT or indefinite factorizer is needed.
+
+No external solvers (Gurobi, OSQP, HiGHS, etc.) will be wrapped or invoked.
 
 ### 7. GPU Acceleration Path
 **[C] ENGINEERING INFERENCE**: 
@@ -86,3 +90,4 @@ QPLIB validation is deferred to future milestones (Step 16A.2 or later). Step 16
 - Nonconvex-QP handling not source-specified.
 - Exact numerical defaults not source-specified.
 - Exact QPLIB coverage not source-specified.
+

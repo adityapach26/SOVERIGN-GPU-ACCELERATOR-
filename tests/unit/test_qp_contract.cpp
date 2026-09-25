@@ -86,3 +86,4 @@ TEST_CASE("Phase 16A.1: QP Mathematical Contract", "[qp][contract]") {
         REQUIRE(status == QPSolverStatus::UnsupportedNonconvex);
     }
 }
+

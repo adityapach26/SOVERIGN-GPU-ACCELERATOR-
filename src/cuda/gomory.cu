@@ -25,7 +25,7 @@ __global__ void gomory_cut_kernel(
     __syncthreads();
 
     // 3. Compute fractional coefficients for all columns
-    // tableau row: ā_ij = pi^T A_j
+    // tableau row: a_bar_ij = pi^T A_j
     for (Index j = threadIdx.x; j < model.cols; j += blockDim.x) {
         Float a_ij = 0.0;
         Index start = model.col_ptrs[j];

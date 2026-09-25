@@ -12,14 +12,12 @@ using namespace sankhya;
 
 TEST_CASE("Phase 21.1: Warp-Level Gomory Cut Generation", "[cuda][gomory]") {
     // We create a mock formulation specifically to yield the tableau row requested by the test:
-    // ā = [1.25, 2.75, 0.50, -1.25]
-    // Since ā_i = e_i^T B^{-1} A, we can simply construct B = I.
+    // a_bar = [1.25, 2.75, 0.50, -1.25]
+    // Since a_bar_i = e_i^T B^{-1} A, we can simply construct B = I.
     // That means B^{-1} = I, so the extracted tableau row is exactly the row of A.
     // A will have 1 row and 5 columns (the 5th is the basic slack variable representing B=I).
     
     core::Model host_model;
-    host_model.num_rows = 1;
-    host_model.num_cols = 5;
     host_model.A.rows = 1;
     host_model.A.cols = 5;
     

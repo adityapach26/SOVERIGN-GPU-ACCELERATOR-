@@ -335,16 +335,17 @@ QPResult QPSolver::solve_with_diagnostics(
 
         // Build rhs_x for the normal equations
         // rhs_x = -rd - complementarity adjustments
+        const Float sigma = 0.2;
         for (Index i = 0; i < n; ++i) {
             auto ii = static_cast<std::size_t>(i);
             Float comp_term = 0.0;
             if (has_lb[ii]) {
                 Float gap = std::max(x[ii] - lb[ii], 1e-12);
-                comp_term += (mu - zl[ii] * gap) / gap;
+                comp_term += (sigma * mu - zl[ii] * gap) / gap;
             }
             if (has_ub[ii]) {
                 Float gap = std::max(ub[ii] - x[ii], 1e-12);
-                comp_term -= (mu - zu[ii] * gap) / gap;
+                comp_term -= (sigma * mu - zu[ii] * gap) / gap;
             }
             rhs_x[ii] = -rd[ii] + comp_term;
         }
@@ -401,10 +402,10 @@ QPResult QPSolver::solve_with_diagnostics(
             std::vector<Float> Winv_rhs_x = rhs_x;
             dense_cholesky_solve(n, L_W, Winv_rhs_x);
 
-            // rhs_y = -rp + A * W^{-1} * rhs_x
+            // rhs_y = -rp - A * W^{-1} * rhs_x
             sparse_matvec(qp.lp_part.A, Winv_rhs_x, rhs_y);
             for (Index i = 0; i < m; ++i) {
-                rhs_y[static_cast<std::size_t>(i)] -= rp[static_cast<std::size_t>(i)];
+                rhs_y[static_cast<std::size_t>(i)] = -rhs_y[static_cast<std::size_t>(i)] - rp[static_cast<std::size_t>(i)];
             }
 
             // Cholesky factorize S
@@ -436,11 +437,11 @@ QPResult QPSolver::solve_with_diagnostics(
                 auto ii = static_cast<std::size_t>(i);
                 if (has_lb[ii]) {
                     Float gap = std::max(x[ii] - lb[ii], 1e-12);
-                    dzl[ii] = (mu - zl[ii] * gap - zl[ii] * dx[ii]) / gap;
+                    dzl[ii] = (sigma * mu - zl[ii] * gap - zl[ii] * dx[ii]) / gap;
                 }
                 if (has_ub[ii]) {
                     Float gap = std::max(ub[ii] - x[ii], 1e-12);
-                    dzu[ii] = (mu - zu[ii] * gap + zu[ii] * dx[ii]) / gap;
+                    dzu[ii] = (sigma * mu - zu[ii] * gap + zu[ii] * dx[ii]) / gap;
                 }
             }
 
@@ -498,11 +499,11 @@ QPResult QPSolver::solve_with_diagnostics(
                 auto ii = static_cast<std::size_t>(i);
                 if (has_lb[ii]) {
                     Float gap = std::max(x[ii] - lb[ii], 1e-12);
-                    dzl[ii] = (mu - zl[ii] * gap - zl[ii] * dx[ii]) / gap;
+                    dzl[ii] = (sigma * mu - zl[ii] * gap - zl[ii] * dx[ii]) / gap;
                 }
                 if (has_ub[ii]) {
                     Float gap = std::max(ub[ii] - x[ii], 1e-12);
-                    dzu[ii] = (mu - zu[ii] * gap + zu[ii] * dx[ii]) / gap;
+                    dzu[ii] = (sigma * mu - zu[ii] * gap + zu[ii] * dx[ii]) / gap;
                 }
             }
 
@@ -568,3 +569,4 @@ QPSolverStatus QPSolver::solve(
 
 } // namespace qp
 } // namespace sankhya
+

@@ -163,7 +163,7 @@ TEST_CASE("Phase 16A.2: Diagonal Convex QP", "[qp][solver]") {
     // s.t. x1 + x2 = 3
     //      x1, x2 >= 0
     // H = [[2,0],[0,4]], c = [-4,-6]
-    // Analytical: KKT => x1=2, x2=1, obj = 1/2*(8+4) -8-6 = 6-14 = -8
+    // Analytical: KKT => x1=5/3, x2=4/3, obj = -25/3 ≈ -8.3333
 
     QPModel qp = build_qp(
         2, 1,
@@ -180,9 +180,9 @@ TEST_CASE("Phase 16A.2: Diagonal Convex QP", "[qp][solver]") {
     auto result = solver.solve_with_diagnostics(qp, x, y, z);
 
     REQUIRE(result.status == QPSolverStatus::Optimal);
-    REQUIRE(x[0] == Catch::Approx(2.0).margin(1e-4));
-    REQUIRE(x[1] == Catch::Approx(1.0).margin(1e-4));
-    REQUIRE(result.objective_value == Catch::Approx(-8.0).margin(1e-4));
+    REQUIRE(x[0] == Catch::Approx(5.0/3.0).margin(1e-4));
+    REQUIRE(x[1] == Catch::Approx(4.0/3.0).margin(1e-4));
+    REQUIRE(result.objective_value == Catch::Approx(-25.0/3.0).margin(1e-4));
     REQUIRE(result.primal_residual < 1e-6);
     REQUIRE(result.dual_residual < 1e-6);
     REQUIRE(result.complementarity < 1e-6);
@@ -372,9 +372,9 @@ TEST_CASE("Phase 16A.2: QPLIB Integration Case", "[qp][solver][qplib]") {
     //   x3 = 7/4
     //   obj = 1/2 * x^T H x + c^T x
     //   Hx = [4*7/4+5/2, 7/4+4*5/2+7/4, 5/2+4*7/4] = [7+5/2, 7/4+10+7/4, 5/2+7] = [19/2, 27/2, 19/2]
-    //   x^T Hx = 7/4*19/2 + 5/2*27/2 + 7/4*19/2 = 133/8 + 135/8 + 133/8 = 401/8 = 50.125
+    //   x^T Hx = 7/4*19/2 + 5/2*27/2 + 7/4*19/2 = 133/8 + 135/4 + 133/8 = 536/8 = 67
     //   c^T x = -8*7/4 -12*5/2 -8*7/4 = -14-30-14 = -58
-    //   obj = 50.125/2 - 58 = 25.0625 - 58 = -32.9375
+    //   obj = 67/2 - 58 = 33.5 - 58 = -24.5
 
     QPModel qp = build_qp(
         3, 1,
@@ -396,7 +396,7 @@ TEST_CASE("Phase 16A.2: QPLIB Integration Case", "[qp][solver][qplib]") {
     REQUIRE(x[0] == Catch::Approx(1.75).margin(1e-4));
     REQUIRE(x[1] == Catch::Approx(2.5).margin(1e-4));
     REQUIRE(x[2] == Catch::Approx(1.75).margin(1e-4));
-    REQUIRE(result.objective_value == Catch::Approx(-32.9375).margin(1e-3));
+    REQUIRE(result.objective_value == Catch::Approx(-24.5).margin(1e-3));
     REQUIRE(result.primal_residual < 1e-6);
     REQUIRE(result.dual_residual < 1e-6);
 

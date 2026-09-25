@@ -3,6 +3,7 @@
 #include "gpu/node_dispatch.cuh"
 #include "gpu/hbf.cuh"
 #include "gpu/vram_arena.cuh"
+#include "milp/node_solver.hpp"
 #include <cmath>
 #include <algorithm>
 

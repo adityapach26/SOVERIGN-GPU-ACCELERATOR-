@@ -126,3 +126,4 @@ TEST_CASE("Phase 17.1: Global Incumbent - Concurrency", "[milp][tree]") {
     REQUIRE(inc.get_obj() == 25.0);
     REQUIRE(inc.get_x() == std::vector<Float>{4.0});
 }
+

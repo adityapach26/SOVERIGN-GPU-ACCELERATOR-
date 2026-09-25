@@ -32,3 +32,4 @@ bool apply_diving_heuristic(
 
 } // namespace heuristics
 } // namespace sankhya
+

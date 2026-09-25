@@ -77,3 +77,4 @@ TEST_CASE("Phase 22.1: Diving Heuristic Variable Selection", "[cuda][heuristics]
     lu_manager.free_all();
     hbf_manager.free_all_nodes();
 }
+

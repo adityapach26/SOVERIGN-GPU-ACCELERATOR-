@@ -40,3 +40,4 @@ std::vector<Cut> CutPool::get_violated_cuts(const std::vector<Float>& x) const {
 
 } // namespace cuts
 } // namespace sankhya
+

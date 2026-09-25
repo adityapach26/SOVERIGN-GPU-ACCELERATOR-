@@ -21,11 +21,11 @@ NodeDispatchResult dispatch_single_node(
 ) {
     // Allocate single-element arrays for batched dispatcher
     WorkingBasisState* d_ws_array = static_cast<WorkingBasisState*>(
-        arena.alloc(sizeof(WorkingBasisState)));
+        arena.allocate(sizeof(WorkingBasisState)));
     DeviceSimplexStatus* d_status = static_cast<DeviceSimplexStatus*>(
-        arena.alloc(sizeof(DeviceSimplexStatus)));
+        arena.allocate(sizeof(DeviceSimplexStatus)));
     Index* d_iter_count = static_cast<Index*>(
-        arena.alloc(sizeof(Index)));
+        arena.allocate(sizeof(Index)));
 
     if (!d_ws_array || !d_status || !d_iter_count) {
         if (d_ws_array) arena.free(d_ws_array);

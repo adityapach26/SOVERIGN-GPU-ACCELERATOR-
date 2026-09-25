@@ -74,5 +74,19 @@ NodeDispatchResult dispatch_single_node(
     return result;
 }
 
+void fetch_working_bounds(
+    const WorkingBasisState& ws,
+    Index num_cols,
+    std::vector<Float>& out_lb,
+    std::vector<Float>& out_ub
+) {
+    out_lb.resize(static_cast<std::size_t>(num_cols));
+    out_ub.resize(static_cast<std::size_t>(num_cols));
+    cudaError_t err = cudaMemcpy(out_lb.data(), ws.lb, num_cols * sizeof(Float), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) throw std::runtime_error("cudaMemcpy from ws.lb failed");
+    err = cudaMemcpy(out_ub.data(), ws.ub, num_cols * sizeof(Float), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) throw std::runtime_error("cudaMemcpy from ws.ub failed");
+}
+
 } // namespace gpu
 } // namespace sankhya

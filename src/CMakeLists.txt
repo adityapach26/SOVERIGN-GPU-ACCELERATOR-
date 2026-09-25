@@ -37,6 +37,8 @@ if(SANKHYA_ENABLE_CUDA)
         ipm/crossover.cu
         gpu/node_dispatch.cu
         milp/node_solver.cpp
+        heuristics/rounding.cpp
+        heuristics/diving.cpp
     )
 
     # Enable CUDA Separable Compilation (relocatable device code, -rdc=true).

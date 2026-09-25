@@ -29,6 +29,7 @@ add_executable(sankhya_unit_tests
     unit/test_milp_tree.cpp
     unit/test_milp_branching.cpp
     unit/test_cut_pool.cpp
+    unit/test_heuristics.cpp
 )
 
 # Link sankhya_core and Catch2 main entrypoint
@@ -59,6 +60,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_mehrotra.cu
         unit/test_crossover.cu
         unit/test_gomory.cu
+        unit/test_diving.cu
         unit/test_milp_node_solver.cpp
     )
 

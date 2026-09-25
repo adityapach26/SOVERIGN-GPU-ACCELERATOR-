@@ -33,5 +33,15 @@ namespace gpu {
         VRAMArena& arena,
         Index num_cols
     );
+
+    /**
+     * @brief CPU-to-GPU bridge to fetch bounds from a WorkingBasisState.
+     */
+    void fetch_working_bounds(
+        const WorkingBasisState& ws,
+        Index num_cols,
+        std::vector<Float>& out_lb,
+        std::vector<Float>& out_ub
+    );
 }
 }

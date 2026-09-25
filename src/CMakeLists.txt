@@ -32,6 +32,7 @@ if(SANKHYA_ENABLE_CUDA)
         cuda/pricing.cu
         cuda/ratio_test.cu
         cuda/kkt.cu
+        cuda/gomory.cu
         ipm/mehrotra_device.cu
         ipm/crossover.cu
         gpu/node_dispatch.cu

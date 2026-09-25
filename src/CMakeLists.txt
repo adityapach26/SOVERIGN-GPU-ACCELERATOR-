@@ -11,6 +11,7 @@ add_library(sankhya_core
     qp/qp_solver.cpp
     milp/tree.cpp
     milp/branching.cpp
+    cuts/cut_pool.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC

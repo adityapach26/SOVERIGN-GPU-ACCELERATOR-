@@ -16,6 +16,7 @@ add_library(sankhya_core
     cuts/cut_pool.cpp
     api/c_api.cpp
     parsers/mps_reader.cpp
+    verifier/certificate.cpp
     heuristics/rounding.cpp
 )
 

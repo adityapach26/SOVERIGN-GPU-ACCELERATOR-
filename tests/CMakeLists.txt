@@ -34,6 +34,7 @@ add_executable(sankhya_unit_tests
     unit/test_spatial_branching.cpp
     unit/test_heuristics.cpp
     unit/test_mps_reader.cpp
+    unit/test_certificate.cpp
 )
 
 # Link sankhya_core and Catch2 main entrypoint

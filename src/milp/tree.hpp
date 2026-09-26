@@ -17,7 +17,7 @@ struct MILPNode {
     int depth;
 
     // Optional standalone model for spatial B&B coefficient updates
-    std::shared_ptr<core::Model> spatial_model;
+    std::shared_ptr<core::Model> spatial_model = nullptr;
 
     // For priority queue ordering: lowest parent_bound = highest priority
     // std::priority_queue outputs the largest element first by default.

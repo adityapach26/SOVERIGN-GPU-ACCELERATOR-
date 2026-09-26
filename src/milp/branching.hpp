@@ -53,5 +53,28 @@ Index select_branching_variable(
     const PseudocostTracker& tracker
 );
 
+/**
+ * @brief Performs a spatial branch on a continuous variable within a bilinear term.
+ * 
+ * Generates two child nodes (Child L: x <= split_val, Child R: x >= split_val),
+ * creates their independent spatial models, regenerates McCormick envelopes
+ * for the new bounds, and enqueues them into the B&B queue.
+ * 
+ * @param parent_node  The parent B&B node being branched on.
+ * @param parent_model The current model state for the parent node.
+ * @param term         The bilinear term (w = x*y) containing the branch variable.
+ * @param branch_var   The variable to split (must be term.x_col or term.y_col).
+ * @param split_val    The value at which to split the domain.
+ * @param queue        The node queue to push the resulting children into.
+ */
+void branch_spatial(
+    const MILPNode& parent_node,
+    const core::Model& parent_model,
+    const core::BilinearTerm& term,
+    Index branch_var,
+    Float split_val,
+    NodeQueue& queue
+);
+
 } // namespace milp
 } // namespace sankhya

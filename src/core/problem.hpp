@@ -15,12 +15,20 @@
 
 #include <stdexcept>
 #include <vector>
+#include <array>
 
 #include "sankhya/types.hpp"
 #include "core/sparse_matrix.hpp"
 
 namespace sankhya {
 namespace core {
+
+struct BilinearTerm {
+    Index x_col;
+    Index y_col;
+    Index w_col;
+    std::array<Index, 4> mccormick_rows;
+};
 
 /**
  * @brief Linear Program data model in canonical equality form
@@ -38,6 +46,7 @@ public:
     std::vector<VariableType> vtype;
     std::vector<Float> rhs;
     CSCMatrix A;
+    std::vector<BilinearTerm> bilinear_terms;
 
     // Presolve equilibrium scaling factors (Step 8.1)
     // A_scaled = D_r * A * D_c, where D_r = diag(row_scale), D_c = diag(col_scale).
@@ -69,6 +78,18 @@ public:
     void add_constraint(const std::vector<Index>& cols,
                         const std::vector<Float>& vals,
                         Float b);
+
+    /**
+     * @brief Replace an existing equality constraint row (must call finalize() again)
+     * @param row  the row index to update
+     * @param cols new non-zero variable indices
+     * @param vals new non-zero coefficients
+     * @param b    new right-hand side
+     */
+    void update_constraint(Index row,
+                           const std::vector<Index>& cols,
+                           const std::vector<Float>& vals,
+                           Float b);
 
     /**
      * @brief Materialize the accumulated constraints into the CSC matrix A

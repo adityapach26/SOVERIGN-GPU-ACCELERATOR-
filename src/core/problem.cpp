@@ -44,6 +44,29 @@ void Model::add_constraint(const std::vector<Index>& cols,
     rhs.push_back(b);
 }
 
+void Model::update_constraint(Index row,
+                              const std::vector<Index>& cols,
+                              const std::vector<Float>& vals,
+                              Float b) {
+    if (row < 0 || static_cast<std::size_t>(row) >= rhs.size()) {
+        throw std::out_of_range("update_constraint: row index out of bounds");
+    }
+    if (cols.size() != vals.size()) {
+        throw std::invalid_argument(
+            "update_constraint: cols and vals must have the same size");
+    }
+    const Index num_vars = static_cast<Index>(vtype.size());
+    for (Index c : cols) {
+        if (c < 0 || c >= num_vars) {
+            throw std::invalid_argument(
+                "update_constraint: column index out of range");
+        }
+    }
+    constraint_cols_[static_cast<std::size_t>(row)] = cols;
+    constraint_vals_[static_cast<std::size_t>(row)] = vals;
+    rhs[static_cast<std::size_t>(row)] = b;
+}
+
 void Model::finalize() {
     const Index num_rows = static_cast<Index>(rhs.size());
     const Index num_cols = static_cast<Index>(vtype.size());

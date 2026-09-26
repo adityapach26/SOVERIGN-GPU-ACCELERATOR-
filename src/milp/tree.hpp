@@ -4,7 +4,9 @@
 #include <queue>
 #include <mutex>
 #include <stdexcept>
+#include <memory>
 #include "sankhya/types.hpp"
+#include "core/problem.hpp"
 
 namespace sankhya {
 namespace milp {
@@ -13,6 +15,9 @@ struct MILPNode {
     uint32_t hbf_id;
     Float parent_bound;
     int depth;
+
+    // Optional standalone model for spatial B&B coefficient updates
+    std::shared_ptr<core::Model> spatial_model;
 
     // For priority queue ordering: lowest parent_bound = highest priority
     // std::priority_queue outputs the largest element first by default.

@@ -92,6 +92,16 @@ public:
                            Float b);
 
     /**
+     * @brief Get the column indices for a specific constraint row
+     */
+    const std::vector<Index>& get_constraint_cols(Index row) const;
+
+    /**
+     * @brief Get the non-zero coefficients for a specific constraint row
+     */
+    const std::vector<Float>& get_constraint_vals(Index row) const;
+
+    /**
      * @brief Materialize the accumulated constraints into the CSC matrix A
      *
      * Validates that the objective/bounds/type vectors are mutually consistent

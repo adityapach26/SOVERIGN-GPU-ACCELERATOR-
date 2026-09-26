@@ -67,6 +67,20 @@ void Model::update_constraint(Index row,
     rhs[static_cast<std::size_t>(row)] = b;
 }
 
+const std::vector<Index>& Model::get_constraint_cols(Index row) const {
+    if (row < 0 || static_cast<std::size_t>(row) >= constraint_cols_.size()) {
+        throw std::out_of_range("get_constraint_cols: row index out of bounds");
+    }
+    return constraint_cols_[static_cast<std::size_t>(row)];
+}
+
+const std::vector<Float>& Model::get_constraint_vals(Index row) const {
+    if (row < 0 || static_cast<std::size_t>(row) >= constraint_vals_.size()) {
+        throw std::out_of_range("get_constraint_vals: row index out of bounds");
+    }
+    return constraint_vals_[static_cast<std::size_t>(row)];
+}
+
 void Model::finalize() {
     const Index num_rows = static_cast<Index>(rhs.size());
     const Index num_cols = static_cast<Index>(vtype.size());

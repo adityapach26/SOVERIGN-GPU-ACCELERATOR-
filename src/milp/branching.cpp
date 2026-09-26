@@ -162,10 +162,23 @@ void branch_spatial(
             Index row_idx = term.mccormick_rows[static_cast<std::size_t>(i)];
             const auto& cut = cuts[static_cast<std::size_t>(i)];
             
-            std::vector<Index> cols = {term.x_col, term.y_col, term.w_col};
+            // Retrieve existing row to preserve slack variables or other terms
+            std::vector<Index> cols = parent_model.get_constraint_cols(row_idx);
+            std::vector<Float> vals = parent_model.get_constraint_vals(row_idx);
+            
+            // Overwrite the McCormick bilinear terms, leaving slacks intact
+            for (std::size_t k = 0; k < cols.size(); ++k) {
+                if (cols[k] == term.x_col) {
+                    vals[k] = cut.coefficients[0];
+                } else if (cols[k] == term.y_col) {
+                    vals[k] = cut.coefficients[1];
+                } else if (cols[k] == term.w_col) {
+                    vals[k] = cut.coefficients[2];
+                }
+            }
             
             // Re-finalize must be called if the matrix A is used
-            child_model->update_constraint(row_idx, cols, cut.coefficients, cut.rhs);
+            child_model->update_constraint(row_idx, cols, vals, cut.rhs);
         }
         
         child_model->finalize();

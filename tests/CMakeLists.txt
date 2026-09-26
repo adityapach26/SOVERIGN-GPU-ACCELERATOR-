@@ -47,6 +47,10 @@ target_include_directories(sankhya_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+target_compile_definitions(sankhya_unit_tests PRIVATE
+    SANKHYA_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
 # Register test with CTest
 add_test(NAME sankhya_unit_tests COMMAND sankhya_unit_tests)
 

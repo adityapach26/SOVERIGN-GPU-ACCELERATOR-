@@ -54,6 +54,13 @@ target_compile_definitions(sankhya_unit_tests PRIVATE
 # Register test with CTest
 add_test(NAME sankhya_unit_tests COMMAND sankhya_unit_tests)
 
+add_custom_target(fetch_netlib_benchmarks
+    COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/download_netlib.sh"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Fetching Netlib benchmarks..."
+)
+add_dependencies(sankhya_unit_tests fetch_netlib_benchmarks)
+
 if(SANKHYA_ENABLE_CUDA)
     target_sources(sankhya_unit_tests PRIVATE
         unit/test_vram_arena.cu

@@ -67,5 +67,6 @@ if(SANKHYA_ENABLE_CUDA)
 
     set_target_properties(sankhya_unit_tests PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
+        CUDA_ARCHITECTURES 75
     )
 endif()

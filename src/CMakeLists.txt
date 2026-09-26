@@ -49,6 +49,7 @@ if(SANKHYA_ENABLE_CUDA)
     # Without this, the CUDA device linker cannot resolve cross-TU device symbols.
     set_target_properties(sankhya_core PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
+        CUDA_ARCHITECTURES 75
     )
 endif()
 

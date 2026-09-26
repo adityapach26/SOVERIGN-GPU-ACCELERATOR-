@@ -29,6 +29,7 @@ add_executable(sankhya_unit_tests
     unit/test_milp_tree.cpp
     unit/test_milp_branching.cpp
     unit/test_cut_pool.cpp
+    unit/test_perturbation.cpp
     unit/test_heuristics.cpp
 )
 

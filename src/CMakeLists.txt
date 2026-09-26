@@ -15,6 +15,7 @@ add_library(sankhya_core
     milp/branching.cpp
     cuts/cut_pool.cpp
     api/c_api.cpp
+    parsers/mps_reader.cpp
     heuristics/rounding.cpp
 )
 

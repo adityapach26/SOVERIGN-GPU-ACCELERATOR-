@@ -23,23 +23,6 @@ static core::Model make_single(double c_obj, double lb, double ub, double rhs_va
     return m;
 }
 
-// Helper: 2-var model for complementarity product tests.
-// min c0*x0 + c1*x1
-// s.t. x0 + x1 = b
-// lb0 <= x0 <= ub0, lb1 <= x1 <= ub1
-static core::Model make_two(double c0, double lb0, double ub0,
-                             double c1, double lb1, double ub1,
-                             double b) {
-    core::Model m;
-    m.sense = OptimizationSense::Minimize;
-    m.add_variable(static_cast<Float>(c0), static_cast<Float>(lb0),
-                   static_cast<Float>(ub0), VariableType::Continuous);
-    m.add_variable(static_cast<Float>(c1), static_cast<Float>(lb1),
-                   static_cast<Float>(ub1), VariableType::Continuous);
-    m.add_constraint({0, 1}, {1.0, 1.0}, static_cast<Float>(b));
-    m.finalize();
-    return m;
-}
 
 // ============================================================
 // Case 1: variable exactly at lower bound, positive reduced cost → PASS

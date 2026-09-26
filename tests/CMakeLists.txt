@@ -69,6 +69,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_feasibility_pump.cu
         unit/test_feasibility_pump_audit.cu
         unit/test_milp_node_solver.cpp
+        integration/test_determinism.cpp
     )
 
     set_target_properties(sankhya_unit_tests PROPERTIES

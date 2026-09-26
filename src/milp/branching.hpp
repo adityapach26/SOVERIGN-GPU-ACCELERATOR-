@@ -2,6 +2,8 @@
 
 #include <vector>
 #include "sankhya/types.hpp"
+#include "milp/tree.hpp"
+#include "core/problem.hpp"
 
 namespace sankhya {
 namespace milp {

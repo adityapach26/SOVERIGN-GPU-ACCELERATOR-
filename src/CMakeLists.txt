@@ -5,6 +5,7 @@ add_library(sankhya_core
     core/problem.cpp
     numerics/sparse_lu.cpp
     numerics/perturbation.cpp
+    mrpl/mccormick.cpp
     simplex/primal.cpp
     simplex/dual.cpp
     ipm/symbolic.cpp

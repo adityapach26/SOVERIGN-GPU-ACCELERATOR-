@@ -39,6 +39,7 @@ if(SANKHYA_ENABLE_CUDA)
         milp/node_solver.cpp
         heuristics/rounding.cpp
         heuristics/diving.cpp
+        cuda/feasibility_pump.cu
     )
 
     # Enable CUDA Separable Compilation (relocatable device code, -rdc=true).

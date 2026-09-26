@@ -1,10 +1,13 @@
 #include "cuda/feasibility_pump.cuh"
 #include <mma.h>
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
 #include <stdexcept>
 #include <iostream>
+#include <string>
 
 using namespace nvcuda;
+using namespace sankhya::math;
 
 namespace sankhya {
 namespace gpu {
@@ -243,6 +246,227 @@ std::vector<Float> compute_fp_projection_direction(
     arena.free(d_x_tilde);
 
     return direction;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 23.2 — Strict FP64 CUDA-Core Incumbent Auditor
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief FP64 CUDA-core kernel: evaluates |Ax - b| for every row and writes
+ *        the per-row squared residual into d_row_residual.
+ *
+ * Each thread block is responsible for one or more rows. We use a simple
+ * parallel reduction over columns within each row to compute (Ax)_i, then
+ * subtract b_i. Arithmetic is entirely in double precision (no WMMA, no half).
+ *
+ * The CSC layout means column j contributes A[j][row] * x[j] to row `row`.
+ * We iterate over all columns and accumulate directly into a per-row double
+ * accumulator stored in shared memory (one accumulator per row in the block).
+ *
+ * Grid: one block per row (grid_size = rows).
+ * Block: up to 256 threads cooperatively reduce over columns.
+ */
+__global__ void fp64_audit_kernel(
+    Index rows, Index cols,
+    const Index* A_col_ptrs,
+    const Index* A_row_indices,
+    const double* A_values_d,
+    const double* b_d,
+    const double* x_d,
+    double* d_row_residual   // output: |residual_i| per row (size = rows)
+) {
+    const int row = static_cast<int>(blockIdx.x);
+    if (row >= rows) return;
+
+    // Shared accumulator for this row (one double per block)
+    __shared__ double s_ax;
+    if (threadIdx.x == 0) {
+        s_ax = 0.0;
+    }
+    __syncthreads();
+
+    // Iterate over columns in chunks of blockDim.x.
+    // Each thread accumulates its own partial sum, then we atomicAdd into s_ax.
+    double local_sum = 0.0;
+    for (int col = static_cast<int>(threadIdx.x); col < cols; col += static_cast<int>(blockDim.x)) {
+        // Find A[row][col] in CSC format
+        Index start = A_col_ptrs[col];
+        Index end   = A_col_ptrs[col + 1];
+        for (Index p = start; p < end; ++p) {
+            if (A_row_indices[p] == row) {
+                local_sum += A_values_d[p] * x_d[col];
+                break; // Each (row, col) pair appears at most once in CSC
+            }
+        }
+    }
+
+    // Reduce across threads via atomicAdd (double atomics require SM60+; T4 is SM75)
+    atomicAdd(&s_ax, local_sum);
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        double residual = s_ax - b_d[row];
+        d_row_residual[row] = (residual < 0.0 ? -residual : residual); // |residual|
+    }
+}
+
+/**
+ * @brief GPU reduce kernel: finds max over d_row_residual[0..rows-1].
+ *        Result is written to d_max_residual[0].
+ *        Uses a simple single-block reduction; rows <= typical LP row count.
+ */
+__global__ void fp64_max_reduce_kernel(
+    const double* d_row_residual,
+    Index rows,
+    double* d_max_residual
+) {
+    extern __shared__ double s_data[];
+
+    int tid = static_cast<int>(threadIdx.x);
+    int stride = static_cast<int>(blockDim.x);
+
+    double local_max = 0.0;
+    for (int i = tid; i < rows; i += stride) {
+        double v = d_row_residual[i];
+        if (v > local_max) local_max = v;
+    }
+    s_data[tid] = local_max;
+    __syncthreads();
+
+    // Standard tree reduction
+    for (int s = stride / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            if (s_data[tid + s] > s_data[tid]) {
+                s_data[tid] = s_data[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        d_max_residual[0] = s_data[0];
+    }
+}
+
+bool verify_incumbent_fp64(
+    const DeviceModel& model,
+    const std::vector<Float>& candidate
+) {
+    if (model.rows == 0 || model.cols == 0) {
+        return true; // Vacuously feasible
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. Upload candidate x and reinterpret model data as double on device.
+    //    Float == double in this project (see types.hpp), so pointers alias safely.
+    //    We still promote explicitly through typed device allocations to make
+    //    the FP64 intent clear and to guard against any future Float == float.
+    // -----------------------------------------------------------------------
+    const std::size_t sz_cols = static_cast<std::size_t>(model.cols);
+    const std::size_t sz_rows = static_cast<std::size_t>(model.rows);
+    const std::size_t sz_nnz  = static_cast<std::size_t>(model.nnz);
+
+    // Allocate device buffers via cudaMalloc (VRAMArena is not injected here
+    // to keep the API simple; the audit is a light, infrequent operation).
+    double* d_x   = nullptr;
+    double* d_b   = nullptr;
+    double* d_Av  = nullptr; // A values as double
+    double* d_row_res = nullptr;
+    double* d_max_res = nullptr;
+
+    auto check = [](cudaError_t e, const char* msg) {
+        if (e != cudaSuccess) {
+            throw std::runtime_error(std::string(msg) + ": " + cudaGetErrorString(e));
+        }
+    };
+
+    check(cudaMalloc(&d_x,       sz_cols * sizeof(double)), "fp64 audit: alloc d_x");
+    check(cudaMalloc(&d_b,       sz_rows * sizeof(double)), "fp64 audit: alloc d_b");
+    check(cudaMalloc(&d_Av,      sz_nnz  * sizeof(double)), "fp64 audit: alloc d_Av");
+    check(cudaMalloc(&d_row_res, sz_rows * sizeof(double)), "fp64 audit: alloc d_row_res");
+    check(cudaMalloc(&d_max_res, sizeof(double)),            "fp64 audit: alloc d_max_res");
+
+    // Promote candidate to double on host (no-op when Float==double, safe otherwise)
+    std::vector<double> x_d(sz_cols);
+    for (std::size_t j = 0; j < sz_cols; ++j) {
+        x_d[j] = static_cast<double>(candidate[j]);
+    }
+
+    check(cudaMemcpy(d_x, x_d.data(), sz_cols * sizeof(double), cudaMemcpyHostToDevice),
+          "fp64 audit: copy d_x");
+
+    // b is stored in device memory via model.rhs (Float* which is double* here)
+    // Copy device→device at double precision
+    check(cudaMemcpy(d_b, model.rhs, sz_rows * sizeof(double), cudaMemcpyDeviceToDevice),
+          "fp64 audit: copy d_b");
+
+    // A values: already double in VRAM via model.values
+    check(cudaMemcpy(d_Av, model.values, sz_nnz * sizeof(double), cudaMemcpyDeviceToDevice),
+          "fp64 audit: copy d_Av");
+
+    // -----------------------------------------------------------------------
+    // 2. Launch FP64 audit kernel: one block per row, 256 threads per block.
+    // -----------------------------------------------------------------------
+    {
+        int block_threads = 256;
+        int grid_rows = static_cast<int>(model.rows);
+        fp64_audit_kernel<<<grid_rows, block_threads>>>(
+            model.rows, model.cols,
+            model.col_ptrs, model.row_indices,
+            d_Av, d_b, d_x,
+            d_row_res
+        );
+        cudaError_t kerr = cudaGetLastError();
+        if (kerr != cudaSuccess) {
+            cudaFree(d_x); cudaFree(d_b); cudaFree(d_Av);
+            cudaFree(d_row_res); cudaFree(d_max_res);
+            throw std::runtime_error(std::string("fp64_audit_kernel launch failed: ") + cudaGetErrorString(kerr));
+        }
+        kerr = cudaDeviceSynchronize();
+        if (kerr != cudaSuccess) {
+            cudaFree(d_x); cudaFree(d_b); cudaFree(d_Av);
+            cudaFree(d_row_res); cudaFree(d_max_res);
+            throw std::runtime_error(std::string("fp64_audit_kernel execution failed: ") + cudaGetErrorString(kerr));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Find max |residual| via a second single-block reduction kernel.
+    // -----------------------------------------------------------------------
+    {
+        int reduce_threads = 256;
+        std::size_t smem = static_cast<std::size_t>(reduce_threads) * sizeof(double);
+        fp64_max_reduce_kernel<<<1, reduce_threads, smem>>>(d_row_res, model.rows, d_max_res);
+        cudaError_t kerr = cudaGetLastError();
+        if (kerr != cudaSuccess) {
+            cudaFree(d_x); cudaFree(d_b); cudaFree(d_Av);
+            cudaFree(d_row_res); cudaFree(d_max_res);
+            throw std::runtime_error(std::string("fp64_max_reduce_kernel launch failed: ") + cudaGetErrorString(kerr));
+        }
+        kerr = cudaDeviceSynchronize();
+        if (kerr != cudaSuccess) {
+            cudaFree(d_x); cudaFree(d_b); cudaFree(d_Av);
+            cudaFree(d_row_res); cudaFree(d_max_res);
+            throw std::runtime_error(std::string("fp64_max_reduce_kernel execution failed: ") + cudaGetErrorString(kerr));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Read result back to host.
+    // -----------------------------------------------------------------------
+    double max_res = 0.0;
+    check(cudaMemcpy(&max_res, d_max_res, sizeof(double), cudaMemcpyDeviceToHost),
+          "fp64 audit: copy d_max_res");
+
+    cudaFree(d_x);
+    cudaFree(d_b);
+    cudaFree(d_Av);
+    cudaFree(d_row_res);
+    cudaFree(d_max_res);
+
+    // Strict FP64 feasibility check: accept iff max |Ax - b| <= kDefaultFeasibilityTol
+    return max_res <= math::kDefaultFeasibilityTol;
 }
 
 } // namespace gpu

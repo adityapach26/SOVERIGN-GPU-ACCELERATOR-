@@ -62,6 +62,7 @@ if(SANKHYA_ENABLE_CUDA)
         unit/test_gomory.cu
         unit/test_diving.cu
         unit/test_feasibility_pump.cu
+        unit/test_feasibility_pump_audit.cu
         unit/test_milp_node_solver.cpp
     )
 

@@ -25,5 +25,25 @@ std::vector<Float> compute_fp_projection_direction(
     VRAMArena& arena
 );
 
+/**
+ * @brief Strictly audits an integer candidate solution using FP64 CUDA-core arithmetic.
+ *
+ * After the low-precision (FP16 WMMA) Feasibility Pump heuristic proposes a candidate,
+ * this function re-evaluates every equality constraint A x = b in strict double precision
+ * on CUDA cores to guard against false incumbents caused by FP16/TF32 precision loss.
+ *
+ * Accepts the candidate only if:
+ *   max_i |( A x )_i - b_i| <= kDefaultFeasibilityTol   (1e-6)
+ *
+ * @param model     Device model containing CSC matrix A and rhs b (in device memory).
+ * @param candidate The proposed integer candidate x (host vector, size == model.cols).
+ * @return true  iff max |Ax - b| <= kDefaultFeasibilityTol (strictly FP64).
+ * @return false if any constraint is violated beyond tolerance.
+ */
+bool verify_incumbent_fp64(
+    const DeviceModel& model,
+    const std::vector<Float>& candidate
+);
+
 } // namespace gpu
 } // namespace sankhya

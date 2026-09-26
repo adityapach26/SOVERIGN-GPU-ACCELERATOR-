@@ -15,6 +15,7 @@ add_library(sankhya_core
     milp/branching.cpp
     cuts/cut_pool.cpp
     api/c_api.cpp
+    heuristics/rounding.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC
@@ -40,7 +41,6 @@ if(SANKHYA_ENABLE_CUDA)
         ipm/crossover.cu
         gpu/node_dispatch.cu
         milp/node_solver.cpp
-        heuristics/rounding.cpp
         heuristics/diving.cpp
         cuda/feasibility_pump.cu
     )

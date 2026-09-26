@@ -8,6 +8,12 @@
 
 namespace sankhya {
 namespace gpu {
+// [ADR Phase 33.1] IPM normal-equations diagonal regularization.
+// M = A Theta A^T is theoretically PSD but late-iteration near-singularity
+// (x_i or s_i -> 0) and A rank-deficiency can cause Cholesky breakdown.
+// Standard IPM practice (IPOPT s2.1, Mehrotra 1992 s4) is M_delta = A Theta A^T + delta*I.
+// delta = 1e-9: ~1e7 * eps_mach, three orders below feasibility tol (1e-6).
+constexpr Float kIPMNormalEquationRegularization = 1e-9;
 
 #define CHECK_CUSPARSE(func)                                                   \
 {                                                                              \
@@ -73,7 +79,8 @@ __global__ void compute_M_numerics_kernel(
                 ptr_j++;
             }
         }
-        M_values[p] = sum;
+        // Apply diagonal regularization: M_delta = A Theta A^T + delta*I (ADR Phase 33.1)
+        M_values[p] = sum + (j == i ? kIPMNormalEquationRegularization : Float(0.0));
     }
 }
 

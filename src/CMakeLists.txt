@@ -14,6 +14,7 @@ add_library(sankhya_core
     milp/tree.cpp
     milp/branching.cpp
     cuts/cut_pool.cpp
+    api/c_api.cpp
 )
 
 target_include_directories(sankhya_core PUBLIC

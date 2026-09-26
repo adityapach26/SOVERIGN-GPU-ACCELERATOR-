@@ -74,3 +74,8 @@ if(SANKHYA_ENABLE_CUDA)
         CUDA_ARCHITECTURES 75
     )
 endif()
+
+# Pure C API Test
+add_executable(sankhya_c_api_test unit/test_c_api.c)
+target_link_libraries(sankhya_c_api_test PRIVATE sankhya_core)
+add_test(NAME sankhya_c_api_test COMMAND sankhya_c_api_test)

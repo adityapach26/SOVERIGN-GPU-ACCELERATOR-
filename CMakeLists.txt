@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.18)
 project(SANKHYA
     VERSION 0.1.0
     DESCRIPTION "SANKHYA / VAJRA-OPT Core Optimization Engine"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 # Require C++17 standard

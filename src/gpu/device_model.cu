@@ -54,7 +54,7 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
             d_model.ub = static_cast<Float*>(arena.allocate(size_ub));
         }
 
-        if (d_model.rows > 0) {
+        if (d_model.rows > 0 && !host_model.rhs.empty()) {
             d_model.rhs = static_cast<Float*>(arena.allocate(size_rhs));
         }
 
@@ -93,7 +93,7 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
             );
         }
         
-        if (d_model.rows > 0) {
+        if (d_model.rows > 0 && !host_model.rhs.empty()) {
             check_cuda_error(
                 cudaMemcpy(d_model.rhs, host_model.rhs.data(), size_rhs, cudaMemcpyHostToDevice),
                 "Failed to upload rhs"

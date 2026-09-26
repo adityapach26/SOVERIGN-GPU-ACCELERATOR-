@@ -54,12 +54,9 @@ static void run_netlib_benchmark(const std::string& name, const std::string& pat
     std::cout << "Primal Residual: " << result.primal_residual << "\n";
 
     // 5 & 6. Obtain x and pi.
-    // The current IPM solver architecture does not expose the primal vector x or dual vector pi
-    // explicitly via the MehrotraResult bridge.
-    // As instructed: "If a required quantity is not exposed: Dual Vector: NOT EXPOSED, Certificate: NOT RUN"
-    std::cout << "Dual Vector: NOT EXPOSED\n";
-    std::cout << "Primal Vector: NOT EXPOSED\n";
-    std::cout << "Certificate: NOT RUN\n";
+    // The IPM solver architecture now exposes the vectors via MehrotraResult.
+    bool cert = verifier::verify_optimal(model, result.x, result.pi);
+    std::cout << "Certificate: " << (cert ? "PASS" : "FAIL") << "\n";
 }
 
 TEST_CASE("Phase 33.1: Netlib/MIPLIB Benchmark Validation", "[integration][benchmark][netlib]") {

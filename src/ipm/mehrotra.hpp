@@ -14,6 +14,8 @@ struct MehrotraResult {
     Float primal_residual;
     Float dual_residual;
     Float duality_gap;
+    std::vector<Float> x;
+    std::vector<Float> pi;
 };
 
 class MehrotraSolver {

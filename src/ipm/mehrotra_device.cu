@@ -455,6 +455,12 @@ MehrotraResult MehrotraSolver::Impl::solve() {
             result.dual_residual   = norm_rd;
             result.duality_gap     = mu;
             result.objective_value = kernels::compute_objective(n_, d_c_, d_x_);
+            
+            result.x.resize(n_);
+            result.pi.resize(m_);
+            CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
+            CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+            
             return result;
         }
 
@@ -535,6 +541,12 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     result.dual_residual   = kernels::compute_norm(n_, d_rd_);
     result.duality_gap     = kernels::compute_mu(n_, d_x_, d_s_);
     result.objective_value = kernels::compute_objective(n_, d_c_, d_x_);
+    
+    result.x.resize(n_);
+    result.pi.resize(m_);
+    CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    
     return result;
 }
 

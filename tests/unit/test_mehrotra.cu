@@ -65,4 +65,15 @@ TEST_CASE("Phase 15.2: GPU Mehrotra Predictor-Corrector IPM", "[cuda][ipm]") {
     
     // Expected optimal objective is -20
     REQUIRE(result.objective_value == Catch::Approx(-20.0).margin(1e-4));
+
+    // Verify the new result vector bridge (Phase 33.1)
+    REQUIRE(result.x.size() == 4); // 4 variables
+    REQUIRE(result.pi.size() == 2); // 2 constraints
+    
+    for (Float val : result.x) {
+        REQUIRE(std::isfinite(val));
+    }
+    for (Float val : result.pi) {
+        REQUIRE(std::isfinite(val));
+    }
 }

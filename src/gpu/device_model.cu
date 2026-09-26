@@ -36,6 +36,7 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
     const std::size_t size_obj = static_cast<std::size_t>(d_model.cols) * sizeof(Float);
     const std::size_t size_lb = static_cast<std::size_t>(d_model.cols) * sizeof(Float);
     const std::size_t size_ub = static_cast<std::size_t>(d_model.cols) * sizeof(Float);
+    const std::size_t size_rhs = static_cast<std::size_t>(d_model.rows) * sizeof(Float);
 
     try {
         // Exclusively use VRAMArena for device allocations (ZERO cudaMalloc calls here).
@@ -51,6 +52,10 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
             d_model.obj = static_cast<Float*>(arena.allocate(size_obj));
             d_model.lb = static_cast<Float*>(arena.allocate(size_lb));
             d_model.ub = static_cast<Float*>(arena.allocate(size_ub));
+        }
+
+        if (d_model.rows > 0) {
+            d_model.rhs = static_cast<Float*>(arena.allocate(size_rhs));
         }
 
         // Perform initialization-only device transfers.
@@ -88,6 +93,13 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
             );
         }
         
+        if (d_model.rows > 0) {
+            check_cuda_error(
+                cudaMemcpy(d_model.rhs, host_model.rhs.data(), size_rhs, cudaMemcpyHostToDevice),
+                "Failed to upload rhs"
+            );
+        }
+        
     } catch (...) {
         // Strict safety rollback: Release allocated pointers exclusively via the arena allocator.
         // DeviceModel does not own these blocks independently.
@@ -97,6 +109,7 @@ DeviceModel upload_to_device(const core::Model& host_model, VRAMArena& arena) {
         arena.free(d_model.obj);
         arena.free(d_model.lb);
         arena.free(d_model.ub);
+        arena.free(d_model.rhs);
         throw; // Escalate failure cleanly
     }
 

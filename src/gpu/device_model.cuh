@@ -38,6 +38,7 @@ struct DeviceModel {
     Float* obj = nullptr;         // size: cols
     Float* lb = nullptr;          // size: cols
     Float* ub = nullptr;          // size: cols
+    Float* rhs = nullptr;         // size: rows
 };
 
 /**

@@ -17,8 +17,7 @@ static void run_netlib_benchmark(const std::string& name, const std::string& pat
 
     core::Model model;
     try {
-        parsers::MPSReader reader(path);
-        model = reader.parse();
+        model = parsers::read_mps(path);
     } catch (const std::exception& e) {
         std::string err = e.what();
         if (err.find("Unsupported") != std::string::npos || err.find("unsupported") != std::string::npos) {
@@ -44,7 +43,6 @@ static void run_netlib_benchmark(const std::string& name, const std::string& pat
         case simplex::SimplexStatus::Optimal: status_str = "Optimal"; break;
         case simplex::SimplexStatus::Infeasible: status_str = "Infeasible"; break;
         case simplex::SimplexStatus::IterationLimit: status_str = "IterationLimit"; break;
-        case simplex::SimplexStatus::NumericalFailure: status_str = "NumericalFailure"; break;
         case simplex::SimplexStatus::Unbounded: status_str = "Unbounded"; break;
         default: status_str = "Unknown"; break;
     }
@@ -54,6 +52,12 @@ static void run_netlib_benchmark(const std::string& name, const std::string& pat
     std::cout << "Primal Residual: " << result.primal_residual << "\n";
 
     // 5 & 6. Obtain x and pi.
+    // The current IPM solver architecture does not expose the primal vector x or dual vector pi
+    // explicitly via the MehrotraResult bridge.
+    // As instructed: "If a required quantity is not exposed: Dual Vector: NOT EXPOSED, Certificate: NOT RUN"
+    std::cout << "Dual Vector: NOT EXPOSED\n";
+    std::cout << "Primal Vector: NOT EXPOSED\n";
+    std::cout << "Certificate: NOT RUN\n";
     // The IPM solver architecture now exposes the vectors via MehrotraResult.
     bool cert = verifier::verify_optimal(model, result.x, result.pi);
     std::cout << "Certificate: " << (cert ? "PASS" : "FAIL") << "\n";

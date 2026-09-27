@@ -85,6 +85,7 @@ private:
     Index* d_M_row_ptrs_;
     Index* d_M_col_indices_;
     Float* d_M_vals_;
+    Float* d_M_orig_vals_;
 
     // Device pointers for L
     Index* d_L_row_ptrs_;
@@ -122,3 +123,4 @@ private:
 
 } // namespace gpu
 } // namespace sankhya
+

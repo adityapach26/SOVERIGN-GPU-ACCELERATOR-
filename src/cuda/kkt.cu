@@ -43,6 +43,33 @@ __global__ void inv_permute_vector_kernel(Index n, const Float* in, Float* out, 
     if (i < n) out[P[i]] = in[i];
 }
 
+__global__ void compute_M_residual_kernel(
+    Index m,
+    const Index* M_row_ptrs, const Index* M_col_indices, const Float* M_vals,
+    const Float* dy_perm, const Float* rhs_perm, Float* r_perm
+) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) {
+        Float sum = 0.0;
+        for (Index p = M_row_ptrs[i]; p < M_row_ptrs[i+1]; ++p) {
+            sum += M_vals[p] * dy_perm[M_col_indices[p]];
+        }
+        r_perm[i] = rhs_perm[i] - sum;
+    }
+}
+
+__global__ void add_correction_kernel(Index m, Float* dy_perm, const Float* correction) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) dy_perm[i] += correction[i];
+}
+__global__ void copy_M_kernel(Index m, const Index* row_ptrs, const Float* src, Float* dst) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) {
+        for (Index p = row_ptrs[i]; p < row_ptrs[i+1]; ++p) {
+            dst[p] = src[p];
+        }
+    }
+}
 __global__ void equilibrate_M_kernel(
     Index m,
     const Index* M_row_ptrs, const Index* M_col_indices, Float* M_vals,
@@ -76,6 +103,9 @@ __global__ void scale_M_kernel(
         Index j = M_col_indices[p];
         Float d_j = D[j];
         M_vals[p] /= (d_i * d_j);
+        if (j == i) {
+            M_vals[p] += kIPMNormalEquationRegularization;
+        }
     }
 }
 
@@ -222,6 +252,7 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     d_M_row_ptrs_ = static_cast<Index*>(arena_.allocate(M_row_bytes));
     d_M_col_indices_ = static_cast<Index*>(arena_.allocate(M_col_bytes));
     d_M_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
+    d_M_orig_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
     
     CHECK_CUDA(cudaMemcpy(d_M_row_ptrs_, M_pattern.row_ptrs.data(), M_row_bytes, cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(d_M_col_indices_, M_pattern.col_indices.data(), M_col_bytes, cudaMemcpyHostToDevice));
@@ -425,6 +456,9 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     );
     CHECK_CUDA(cudaDeviceSynchronize());
 
+    copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_vals_, d_M_orig_vals_);
+    CHECK_CUDA(cudaDeviceSynchronize());
+
     equilibrate_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_D_);
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -538,6 +572,17 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
 
 } // namespace gpu
 } // namespace sankhya
+
+
+
+
+
+
+
+
+
+
+
 
 
 

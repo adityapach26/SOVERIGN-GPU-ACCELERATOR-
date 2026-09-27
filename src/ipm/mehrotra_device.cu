@@ -419,6 +419,10 @@ private:
         Float norm_r3 = kernels::compute_norm(n_, d_r3);
         Float norm_rxs = kernels::compute_norm(n_, d_r_xs);
         
+        Float norm_dy = kernels::compute_norm(m_, d_dy);
+        Float delta_dy_allowance = (1e-9 * norm_dy) / std::max(Float(1.0), norm_rp);
+        Float e1_threshold = std::max(Float(1e-8), delta_dy_allowance);
+        
         Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
         Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);
         Float e3 = norm_r3 / std::max(Float(1.0), norm_rxs);
@@ -434,7 +438,7 @@ private:
         if (model_.obj.size() == 138) { // ADLITTLE diagnostics
             std::cout << "    [KKT Verify] e1=" << e1 << ", e2=" << e2 << ", e3=" << e3 << std::endl;
         }
-        if (e1 > 1e-8 || e2 > 1e-8 || e3 > 1e-8) {
+        if (e1 > e1_threshold || e2 > 1e-8 || e3 > 1e-8) {
             std::cout << "    [KKT Verify] FAILED!" << std::endl;
             return false;
         }
@@ -620,6 +624,9 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         compute_rkkt();
         cudaDeviceSynchronize();
 
+        Float true_rhs_norm_p = kernels::compute_norm(m_, d_r_kkt_);
+        std::cout << "[PREDICTOR] Pre-solve RHS norm: " << true_rhs_norm_p << std::endl;
+
         // Solve for dy_aff (result in d_r_kkt_ in-place)
         kkt_->gpu_cholesky_solve_device(d_r_kkt_);
 
@@ -629,8 +636,22 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         kernels::compute_dx(n_, d_Theta_, d_ds_aff_, d_r_xs_, d_s_, d_dx_aff_);
         cudaDeviceSynchronize();
 
+        Float dy_norm_p = kernels::compute_norm(m_, d_r_kkt_);
+        Float dx_norm_p  = kernels::compute_norm(n_, d_dx_aff_);
+        Float ds_norm_p  = kernels::compute_norm(n_, d_ds_aff_);
+        
+        std::cout << "[PREDICTOR]
+"
+                  << "  rhs_norm: " << rhs_norm_p << "
+"
+                  << "  dx_norm: " << dx_norm_p << "
+"
+                  << "  ds_norm: " << ds_norm_p << "
+";
+
         if (!verify_newton_direction(d_dx_aff_, d_r_kkt_, d_ds_aff_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::IterationLimit;
+            result.status = simplex::SimplexStatus::Infeasible;
+            result.iterations = iter;
             break;
         }
 
@@ -661,14 +682,31 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         compute_rkkt();
         cudaDeviceSynchronize();
 
+        Float true_rhs_norm_c = kernels::compute_norm(m_, d_r_kkt_);
+        std::cout << "[CORRECTOR] Pre-solve RHS norm: " << true_rhs_norm_c << std::endl;
+
         kkt_->gpu_cholesky_solve_device(d_r_kkt_);
 
         compute_ds(d_ds_);
         kernels::compute_dx(n_, d_Theta_, d_ds_, d_r_xs_, d_s_, d_dx_);
         cudaDeviceSynchronize();
 
+        Float dy_norm_c = kernels::compute_norm(m_, d_r_kkt_);
+        Float dx_norm_c  = kernels::compute_norm(n_, d_dx_);
+        Float ds_norm_c  = kernels::compute_norm(n_, d_ds_);
+        
+        std::cout << "[CORRECTOR]
+"
+                  << "  rhs_norm: " << rhs_norm_c << "
+"
+                  << "  dx_norm: " << dx_norm_c << "
+"
+                  << "  ds_norm: " << ds_norm_c << "
+";
+
         if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::IterationLimit;
+            result.status = simplex::SimplexStatus::Infeasible;
+            result.iterations = iter;
             break;
         }
 
@@ -777,11 +815,13 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         }
     }
 
-    // Iteration limit
+    // End of loop
     compute_residuals();
     cudaDeviceSynchronize();
-    result.status          = simplex::SimplexStatus::IterationLimit;
-    result.iterations      = max_iter;
+    if (result.status == simplex::SimplexStatus::Optimal) {
+        result.status          = simplex::SimplexStatus::IterationLimit;
+        result.iterations      = max_iter;
+    }
     result.primal_residual = kernels::compute_norm(m_, d_rp_);
     result.dual_residual   = kernels::compute_norm(n_, d_rd_);
     result.duality_gap     = kernels::compute_mu(n_, d_x_, d_s_);

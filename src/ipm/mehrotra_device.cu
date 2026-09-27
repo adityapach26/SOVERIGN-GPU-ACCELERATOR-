@@ -630,7 +630,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         cudaDeviceSynchronize();
 
         if (!verify_newton_direction(d_dx_aff_, d_r_kkt_, d_ds_aff_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::Error;
+            result.status = simplex::SimplexStatus::IterationLimit;
             break;
         }
 
@@ -668,7 +668,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         cudaDeviceSynchronize();
 
         if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::Error;
+            result.status = simplex::SimplexStatus::IterationLimit;
             break;
         }
 
@@ -811,6 +811,7 @@ MehrotraResult MehrotraSolver::solve() {
 
 } // namespace ipm
 } // namespace sankhya
+
 
 
 

@@ -546,7 +546,14 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
-    Float stop_tol = 1e-10 * std::max(Float(1.0), rhs_norm);
+    // Physical M0 stopping tolerance.
+    // The verifier threshold on e1/e2 is 1e-8. We target M0 residual at 1e-10
+    // so the Schur-equation error is safely below what verify_newton_direction checks.
+    // This is an explicit numerical contract: the KKT solve must solve M0 dy = rhs,
+    // not merely M_delta dy = rhs.
+    constexpr Float kPhysicalResidualTol = 1e-10;
+    // Relative fallback: also accept if we have achieved machine-precision relative accuracy.
+    const Float stop_tol = std::min(kPhysicalResidualTol, 1e-10 * std::max(Float(1.0), rhs_norm));
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     
@@ -602,35 +609,35 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         
         Float initial_dy_norm = compute_norm_kkt(m_, d_dy_perm);
 
-        // --- COMPUTE INITIAL RESIDUAL: r_delta = rhs - Mdelta * dy ---
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+        // --- COMPUTE INITIAL PHYSICAL RESIDUAL: r0 = rhs - M0 * dy ---
+        // This is the residual of the equation we ACTUALLY want to solve.
+        // The regularization bias is delta*dy: r0 = r_delta + delta*dy.
+        // Iterative refinement against M_delta (as preconditioner) will eliminate this bias.
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
         CHECK_CUDA(cudaDeviceSynchronize());
         
-        Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
-
-        // Separately compute M0 residual for diagnostics only
-        Float* d_r0 = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        Float initial_M0_residual = compute_norm_kkt(m_, d_r0);
+        Float r0_norm_before = compute_norm_kkt(m_, d_r_perm);
+        Float initial_M0_residual = r0_norm_before;
         
-        if (r_norm_before <= stop_tol) {
-            arena_.free(d_r0);
+        if (r0_norm_before <= stop_tol) {
             success = true;
             break;
         }
         
         bool refinement_converged = false;
         Float correction_norm = 0.0;
-        Float r_norm_after = r_norm_before;
-        Float post_correction_M0_residual = initial_M0_residual;
+        Float r0_norm_after = r0_norm_before;
         
-        // --- ITERATIVE REFINEMENT ---
-        for (int iter = 0; iter < 5; ++iter) {
+        // --- ITERATIVE REFINEMENT: Defect Correction targeting M0 ---
+        // Each step: solve M_delta * correction = r0, then dy += correction.
+        // M_delta is used ONLY as the preconditioner for the correction solve.
+        // Convergence measured on ||rhs - M0 * dy||.
+        // Delta is NOT increased because M0 refinement is progressing; that is expected.
+        for (int iter = 0; iter < 10; ++iter) {
             // Backup current dy before applying correction
             CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
             
-            // Solve Mdelta * correction = r_delta
+            // Solve M_delta * correction = r0  (preconditioned defect correction)
             if (iter == 0) {
                 CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
             }
@@ -647,48 +654,45 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            // r_delta = rhs - Mdelta * dy
-            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            // Recompute PHYSICAL residual: r0 = rhs - M0 * dy
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            r_norm_after = compute_norm_kkt(m_, d_r_perm);
+            r0_norm_after = compute_norm_kkt(m_, d_r_perm);
             
-            if (r_norm_after <= stop_tol) {
+            if (r0_norm_after <= stop_tol) {
                 refinement_converged = true;
                 break;
             }
             
-            if (r_norm_after >= r_norm_before) {
-                // Reject correction
+            if (r0_norm_after >= r0_norm_before) {
+                // Physical residual stagnated or grew; reject this correction
                 CHECK_CUDA(cudaMemcpy(d_dy_perm, d_dy_backup, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                // Recompute r0 on the rejected-correction dy for correct r_perm state
+                compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+                CHECK_CUDA(cudaDeviceSynchronize());
+                r0_norm_after = r0_norm_before; // restore for diagnostics
                 break;
             }
             
-            r_norm_before = r_norm_after;
+            r0_norm_before = r0_norm_after;
         }
         
         if (refinement_converged) {
-            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
-            CHECK_CUDA(cudaDeviceSynchronize());
-            post_correction_M0_residual = compute_norm_kkt(m_, d_r0);
-            arena_.free(d_r0);
             success = true;
             break;
         }
 
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        post_correction_M0_residual = compute_norm_kkt(m_, d_r0);
-        arena_.free(d_r0);
-        
-        // Print the requested diagnostics for one failed retry:
-        std::cout << "    [KKT] Refinement failed on retry " << retry << std::endl
+        // Physical residual did not converge on this retry.
+        // Increasing delta helps Cholesky stability; a better-conditioned M_delta
+        // may allow the defect-correction loop to converge faster.
+        std::cout << "    [KKT] Physical refinement did not converge on retry " << retry << std::endl
                   << "      delta: " << delta << std::endl
                   << "      rhs_norm: " << rhs_norm << std::endl
                   << "      initial_dy_norm: " << initial_dy_norm << std::endl
                   << "      initial_M0_residual: " << initial_M0_residual << std::endl
                   << "      correction_norm: " << correction_norm << std::endl
-                  << "      post_correction_M0_residual: " << post_correction_M0_residual << std::endl;
+                  << "      final_M0_residual: " << r0_norm_after << std::endl;
     }
     
     if (!success) {

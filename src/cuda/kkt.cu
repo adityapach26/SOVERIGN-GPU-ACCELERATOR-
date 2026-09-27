@@ -586,16 +586,19 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         }
         
         CHECK_CUDA(cudaMemset(d_dy_perm, 0, m_ * sizeof(Float)));
-        bool refinement_failed = false;
+        bool refinement_converged = false;
+        bool refinement_deteriorated = false;
         
         for (int iter = 0; iter < 5; ++iter) {
-            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            // Compute residual against M0, not Mdelta
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
             
             Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
             
-            if (iter > 0) {
-                if (r_norm_before < stop_tol) break;
+            if (r_norm_before <= stop_tol) {
+                refinement_converged = true;
+                break;
             }
             
             // Backup current solution before applying correction
@@ -615,29 +618,36 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            // Compute residual after correction
-            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            // Compute residual against M0 after correction
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
             Float r_norm_after = compute_norm_kkt(m_, d_r_perm);
             
-            if (iter > 0) {
-                std::cout << "    [Refinement] iter " << iter 
-                          << " delta: " << delta
-                          << " | res_before: " << r_norm_before 
-                          << " | res_after: " << r_norm_after << std::endl;
+            if (r_norm_after <= stop_tol) {
+                refinement_converged = true;
+                break;
             }
-            
+
             if (r_norm_after >= r_norm_before) {
                 CHECK_CUDA(cudaMemcpy(d_dy_perm, d_dy_backup, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-                std::cout << "    [Refinement] Deteriorated! Rejecting correction." << std::endl;
-                refinement_failed = true;
+                std::cout << "    [KKT Refinement] Deteriorated on retry " << retry << std::endl
+                          << "      delta: " << delta << std::endl
+                          << "      res_before(M0): " << r_norm_before << std::endl
+                          << "      res_after(M0): " << r_norm_after << std::endl
+                          << "      converged: false (rejecting correction)" << std::endl;
+                refinement_deteriorated = true;
                 break;
             }
         }
         
-        if (!refinement_failed) {
+        if (refinement_converged) {
             success = true;
             break;
+        } else if (!refinement_deteriorated) {
+            // It exhausted iteration count without hitting deterioration OR convergence
+            std::cout << "    [KKT Refinement] Exhausted iterations on retry " << retry << std::endl
+                      << "      delta: " << delta << std::endl
+                      << "      converged: false (moving to next retry)" << std::endl;
         }
     }
     

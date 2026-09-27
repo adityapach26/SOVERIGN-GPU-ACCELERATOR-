@@ -415,15 +415,6 @@ private:
 
         kernels::compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
         
-        // Fold the known regularization contribution into d_r1 in-place.
-        // The system solved is (M + delta I) dy = rhs, so the exact primal
-        // Newton identity is:  A dx + rp + delta * dy = 0
-        // Adding delta*dy to d_r1 directly tests this identity rather than
-        // comparing two independently reduced norms.
-        int blocks_m = (m_ + 255) / 256;
-        kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, Float(1e-9), d_dy, d_r1);
-        CHECK_CUDA_IPM(cudaGetLastError());
-
         Float norm_r1 = kernels::compute_norm(m_, d_r1);
         Float norm_r2 = kernels::compute_norm(n_, d_r2);
         Float norm_r3 = kernels::compute_norm(n_, d_r3);
@@ -579,6 +570,12 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float norm_rp = kernels::compute_norm(m_, d_rp_);
         Float norm_rd = kernels::compute_norm(n_, d_rd_);
         Float mu      = kernels::compute_mu(n_, d_x_, d_s_);
+
+        if (iter == 0) {
+            rp_scale0_ = std::max(Float(1.0), norm_rp);
+            rd_scale0_ = std::max(Float(1.0), norm_rd);
+            mu_scale0_ = std::max(Float(1.0), mu);
+        }
 
         if (model_.obj.size() == 138 && (iter % 10 == 0 || iter >= 195)) { // DIAGNOSTIC: only for adlittle
             Float theta_min = 1e30, theta_max = 0.0;

@@ -546,11 +546,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
-    // The KKT solver's absolute error injects directly into the primal/dual residuals.
-    // If rhs_norm is artificially huge (due to small s), scaling stop_tol by rhs_norm
-    // allows massive absolute errors, skipping iterative refinement and ruining the step.
-    // We strictly cap the tolerance to ensure the Newton step remains numerically valid.
-    Float stop_tol = std::min(Float(1e-10), 1e-10 * std::max(Float(1.0), rhs_norm));
+    Float stop_tol = 1e-10 * std::max(Float(1.0), rhs_norm);
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     
@@ -606,14 +602,20 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         
         Float initial_dy_norm = compute_norm_kkt(m_, d_dy_perm);
 
-        // --- COMPUTE INITIAL RESIDUAL: r = rhs - M0 * dy ---
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+        // --- COMPUTE INITIAL RESIDUAL: r_delta = rhs - Mdelta * dy ---
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
         CHECK_CUDA(cudaDeviceSynchronize());
         
         Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
-        Float initial_M0_residual = r_norm_before;
+
+        // Separately compute M0 residual for diagnostics only
+        Float* d_r0 = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        Float initial_M0_residual = compute_norm_kkt(m_, d_r0);
         
         if (r_norm_before <= stop_tol) {
+            arena_.free(d_r0);
             success = true;
             break;
         }
@@ -621,13 +623,14 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         bool refinement_converged = false;
         Float correction_norm = 0.0;
         Float r_norm_after = r_norm_before;
+        Float post_correction_M0_residual = initial_M0_residual;
         
         // --- ITERATIVE REFINEMENT ---
         for (int iter = 0; iter < 5; ++iter) {
             // Backup current dy before applying correction
             CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
             
-            // Solve Mdelta * correction = r
+            // Solve Mdelta * correction = r_delta
             if (iter == 0) {
                 CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
             }
@@ -644,8 +647,8 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            // r = rhs - M0 * dy
-            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            // r_delta = rhs - Mdelta * dy
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
             
             r_norm_after = compute_norm_kkt(m_, d_r_perm);
@@ -665,9 +668,18 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         }
         
         if (refinement_converged) {
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            post_correction_M0_residual = compute_norm_kkt(m_, d_r0);
+            arena_.free(d_r0);
             success = true;
             break;
         }
+
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r0);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        post_correction_M0_residual = compute_norm_kkt(m_, d_r0);
+        arena_.free(d_r0);
         
         // Print the requested diagnostics for one failed retry:
         std::cout << "    [KKT] Refinement failed on retry " << retry << std::endl
@@ -676,7 +688,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
                   << "      initial_dy_norm: " << initial_dy_norm << std::endl
                   << "      initial_M0_residual: " << initial_M0_residual << std::endl
                   << "      correction_norm: " << correction_norm << std::endl
-                  << "      post_correction_M0_residual: " << r_norm_after << std::endl;
+                  << "      post_correction_M0_residual: " << post_correction_M0_residual << std::endl;
     }
     
     if (!success) {

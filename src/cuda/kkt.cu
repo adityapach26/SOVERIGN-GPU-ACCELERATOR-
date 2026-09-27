@@ -267,7 +267,7 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     d_M_row_ptrs_ = static_cast<Index*>(arena_.allocate(M_row_bytes));
     d_M_col_indices_ = static_cast<Index*>(arena_.allocate(M_col_bytes));
     d_M_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
-    d_M_orig_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
+    d_M_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
     
     CHECK_CUDA(cudaMemcpy(d_M_row_ptrs_, M_pattern.row_ptrs.data(), M_row_bytes, cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(d_M_col_indices_, M_pattern.col_indices.data(), M_col_bytes, cudaMemcpyHostToDevice));
@@ -471,7 +471,7 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     );
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_vals_, d_M_orig_vals_);
+    copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_vals_, d_M_vals_);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     // Scale kernel was removed to preserve the unscaled Cholesky factorization contract for Phase 15.1
@@ -546,7 +546,15 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     Float stop_tol = 1e-10 * std::max(Float(1.0), rhs_norm);
     
     for (int iter = 0; iter < 5; ++iter) {
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        
+        Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
+        
+        if (iter > 0) {
+            if (r_norm_before < stop_tol) break;
+        }
+<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
         CHECK_CUDA(cudaDeviceSynchronize());
         
         if (iter > 0) {
@@ -565,7 +573,18 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         }
         
         add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        
+        // Compute residual after correction
+        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        Float r_norm_after = compute_norm_kkt(m_, d_r_perm);
+        
+        std::cout << "    [Refinement] iter " << iter 
+                  << " | res_before: " << r_norm_before 
+                  << " | res_after: " << r_norm_after << std::endl;
     }
+
     
     inv_permute_vector_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_rhs_orig, d_P_);
     CHECK_CUDA(cudaDeviceSynchronize());

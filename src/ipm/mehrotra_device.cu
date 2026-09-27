@@ -19,6 +19,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 #define CHECK_CUDA_IPM(func)                                                   \
 {                                                                              \
@@ -421,7 +422,14 @@ private:
         
         Float norm_dy = kernels::compute_norm(m_, d_dy);
         Float delta_dy_allowance = (1e-9 * norm_dy) / std::max(Float(1.0), norm_rp);
-        Float e1_threshold = std::max(Float(1e-8), delta_dy_allowance);
+        // fp_guard: e1 and delta_dy_allowance evaluate the same mathematical quantity
+        // (||A dx + rp|| = delta * ||dy||) via two independent GPU reduction paths.
+        // The two paths differ by at most ~sqrt(m) * eps_mach in relative error.
+        // 8 * epsilon gives a conservative machine-precision-aware margin.
+        const Float fp_guard =
+            Float(8.0) * std::numeric_limits<Float>::epsilon()
+            * std::max(Float(1.0), delta_dy_allowance);
+        Float e1_threshold = std::max(Float(1e-8), delta_dy_allowance + fp_guard);
         
         Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
         Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);

@@ -729,11 +729,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
                   << "  ds_norm: " << ds_norm_c
                   << std::endl;
 
-        if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::Infeasible;
-            result.iterations = iter;
-            break;
-        }
+        bool corrector_valid = verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd);
 
         // Corrector step lengths with fraction-to-boundary (eta = 0.995)
         Float alpha_p_max = kernels::compute_step_length(n_, d_x_, d_dx_);
@@ -768,7 +764,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         int backtrack_iters = 0;
         bool step_accepted = false;
         
-        for (int direction = 0; direction < 2 && !step_accepted; ++direction) {
+        for (int direction = (corrector_valid ? 0 : 1); direction < 2 && !step_accepted; ++direction) {
             if (direction == 1) {
                 // Centered safeguard, using exactly the existing elimination:
                 // S dx + X ds = -X s + sigma_c * mu * e,

@@ -109,10 +109,10 @@ __global__ void equilibrate_M_kernel(
     D[i] = sqrt(max(abs(diag_val), safe_floor));
 }
 
-__global__ void scale_M_kernel(
+__global__ void add_regularization_kernel(
     Index m,
     const Index* M_row_ptrs, const Index* M_col_indices, Float* M_vals,
-    const Float* /*D*/
+    Float delta
 ) {
     Index i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= m) return;
@@ -120,7 +120,7 @@ __global__ void scale_M_kernel(
     for (Index p = M_row_ptrs[i]; p < M_row_ptrs[i+1]; ++p) {
         Index j = M_col_indices[p];
         if (j == i) {
-            M_vals[p] += kIPMNormalEquationRegularization;
+            M_vals[p] += delta;
         }
     }
 }
@@ -267,7 +267,7 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     d_M_row_ptrs_ = static_cast<Index*>(arena_.allocate(M_row_bytes));
     d_M_col_indices_ = static_cast<Index*>(arena_.allocate(M_col_bytes));
     d_M_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
-    d_M_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
+    d_M_orig_vals_ = static_cast<Float*>(arena_.allocate(M_val_bytes));
     
     CHECK_CUDA(cudaMemcpy(d_M_row_ptrs_, M_pattern.row_ptrs.data(), M_row_bytes, cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(d_M_col_indices_, M_pattern.col_indices.data(), M_col_bytes, cudaMemcpyHostToDevice));
@@ -464,19 +464,19 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     
     compute_M_numerics_kernel<<<blocks, threads>>>(
         m_, n_,
-        d_M_row_ptrs_, d_M_col_indices_, d_M_vals_,
+        d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_,
         d_A_row_ptrs_, d_A_col_indices_, d_A_vals_,
         d_Theta,
         d_P_
     );
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_vals_, d_M_vals_);
+    copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_orig_vals_, d_M_vals_);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     // Scale kernel was removed to preserve the unscaled Cholesky factorization contract for Phase 15.1
     // Apply only delta regularization to the diagonal
-    scale_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, nullptr);
+    add_regularization_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, kIPMNormalEquationRegularization);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     // 2. Cholesky numerical factorization (M = LL^T)
@@ -544,44 +544,111 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
     Float stop_tol = 1e-10 * std::max(Float(1.0), rhs_norm);
+    Float delta = kIPMNormalEquationRegularization;
+    bool success = false;
     
-    for (int iter = 0; iter < 5; ++iter) {
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        
-        Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
-        
-        if (iter > 0) {
-            if (r_norm_before < stop_tol) break;
+    Float* d_dy_backup = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+    
+    for (int retry = 0; retry < 5; ++retry) {
+        if (retry > 0) {
+            delta *= 10.0;
+            // 1. Rebuild Mdelta from unregularized M0
+            copy_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_orig_vals_, d_M_vals_);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            add_regularization_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, delta);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            
+            // 2. Re-factorize Mdelta = LL^T
+            int h_error = 0;
+            CHECK_CUDA(cudaMemcpy(d_factorization_error_, &h_error, sizeof(int), cudaMemcpyHostToDevice));
+            
+            for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+                Index num_nodes = level_ptrs_[lvl + 1] - level_ptrs_[lvl];
+                if (num_nodes == 0) continue;
+                int lvl_threads = 256;
+                int lvl_blocks = (num_nodes + lvl_threads - 1) / lvl_threads;
+                cholesky_level_kernel<<<lvl_blocks, lvl_threads>>>(
+                    num_nodes, d_level_nodes_ + level_ptrs_[lvl],
+                    d_M_row_ptrs_, d_M_col_indices_, d_M_vals_,
+                    d_L_row_ptrs_, d_L_col_indices_, d_L_vals_,
+                    d_factorization_error_
+                );
+                CHECK_CUDA(cudaGetLastError());
+            }
+            CHECK_CUDA(cudaDeviceSynchronize());
+            
+            CHECK_CUDA(cudaMemcpy(&h_error, d_factorization_error_, sizeof(int), cudaMemcpyDeviceToHost));
+            if (h_error > 0) {
+                std::cout << "    [Retry] Factorization failed at delta = " << delta << std::endl;
+                continue; // Next retry
+            }
         }
         
-        if (iter == 0) {
-            CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-            CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
-        } else {
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
+        CHECK_CUDA(cudaMemset(d_dy_perm, 0, m_ * sizeof(Float)));
+        bool refinement_failed = false;
+        
+        for (int iter = 0; iter < 5; ++iter) {
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            
+            Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
+            
+            if (iter > 0) {
+                if (r_norm_before < stop_tol) break;
+            }
+            
+            // Backup current solution before applying correction
+            CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            
+            // SpSV analysis must be re-run if values change (retry > 0)
+            if (iter == 0) {
+                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
+                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
+            } else {
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
+            }
+            
+            add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            
+            // Compute residual after correction
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            Float r_norm_after = compute_norm_kkt(m_, d_r_perm);
+            
+            if (iter > 0) {
+                std::cout << "    [Refinement] iter " << iter 
+                          << " delta: " << delta
+                          << " | res_before: " << r_norm_before 
+                          << " | res_after: " << r_norm_after << std::endl;
+            }
+            
+            if (r_norm_after >= r_norm_before) {
+                CHECK_CUDA(cudaMemcpy(d_dy_perm, d_dy_backup, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                std::cout << "    [Refinement] Deteriorated! Rejecting correction." << std::endl;
+                refinement_failed = true;
+                break;
+            }
         }
         
-        add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        
-        // Compute residual after correction
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        Float r_norm_after = compute_norm_kkt(m_, d_r_perm);
-        
-        std::cout << "    [Refinement] iter " << iter 
-                  << " | res_before: " << r_norm_before 
-                  << " | res_after: " << r_norm_after << std::endl;
+        if (!refinement_failed) {
+            success = true;
+            break;
+        }
+    }
+    
+    if (!success) {
+        std::cout << "    [Retry] All adaptive regularization retries exhausted." << std::endl;
     }
 
     
     inv_permute_vector_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_rhs_orig, d_P_);
     CHECK_CUDA(cudaDeviceSynchronize());
     
+    arena_.free(d_dy_backup);
     arena_.free(d_correction);
     arena_.free(d_r_perm);
     arena_.free(d_dy_perm);

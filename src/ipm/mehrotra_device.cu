@@ -439,7 +439,7 @@ private:
         cusparseDestroyDnVec(v_dx);
 
         std::cout << "[KKT Verify]"
-                  << "  regularized_primal_residual: " << norm_r1
+                  << "  physical_M0_residual: " << norm_r1
                   << "  e1: " << e1
                   << "  e2: " << e2
                   << "  e3: " << e3

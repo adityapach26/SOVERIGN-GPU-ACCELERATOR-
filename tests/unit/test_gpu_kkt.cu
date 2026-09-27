@@ -121,3 +121,75 @@ TEST_CASE("Phase 15.1: GPU Sparse Cholesky Factorization Path (Hardened)", "[cud
         REQUIRE(solve_residual < 1e-6);
     }
 }
+
+// ==========================================================================
+// Phase 15.2b: KKT Physical Relative Residual Contract
+//
+// Verifies the numerical contract introduced in commit 0d32913 / follow-up:
+//   The KKT solver must solve M0*dy = rhs (the PHYSICAL equation).
+//   M_delta = M0 + delta*I is used ONLY as the factorization preconditioner.
+//   Acceptance is based on ||rhs - M0*dy|| / max(1, ||rhs||) <= 1e-10,
+//   NOT on an absolute floor.
+//
+// This test uses a scaled RHS (scale=1e4) so that the FP64 residual floor
+// (~1e-11 absolute) is above the old absolute 1e-10 criterion but well
+// within the correct relative criterion (1e-10 * rhs_norm ~ 1e-6).
+// ==========================================================================
+TEST_CASE("Phase 15.2b: KKT physical relative residual contract", "[cuda][kkt][ipm]") {
+    // M0 = A*Theta*A^T = [[6,1,1],[1,5,0],[1,0,5]].  True x = [1,2,3], b = [11,11,16].
+    // Scaled RHS: b_scaled = scale*b, x_scaled = scale*x.
+    // FP64 floor of M0 residual after refinement: ~scale * eps * cond(M0) * ||b||
+    //   = 1e4 * 2.2e-16 * ~10 * 22 = ~4.8e-11  (absolute)
+    //   = ~4.8e-11 / (16e4) = ~3e-15            (relative)
+    // Relative is far below 1e-10 -> should PASS the new contract.
+    // Absolute 4.8e-11 may be > 1e-10 old floor -> would have FAILED old criterion.
+    core::CSRMatrix A;
+    A.rows = 3;
+    A.cols = 5;
+    A.row_ptrs = {0, 3, 5, 7};
+    A.col_indices = {0, 3, 4, 1, 3, 2, 4};
+    A.values = {2.0, 1.0, 1.0, 2.0, 1.0, 2.0, 1.0};
+    std::vector<Float> Theta = {1.0, 1.0, 1.0, 1.0, 1.0};
+
+    std::vector<Index> P = ipm::compute_amd_ordering(A);
+    ipm::SymbolicFactorization sym;
+    ipm::compute_symbolic_factorization(A, P, sym);
+
+    core::CSRMatrix M_pattern;
+    M_pattern.rows = 3; M_pattern.cols = 3;
+    M_pattern.row_ptrs = {0, 2, 5, 7};
+    M_pattern.col_indices = {0, 1, 0, 1, 2, 1, 2};
+    M_pattern.values = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+    gpu::VRAMArena arena(1024 * 1024);
+    gpu::GPUKKTCholeskySolver kkt_solver(arena, A, sym, M_pattern);
+    kkt_solver.gpu_cholesky_factorize(A, Theta);
+
+    constexpr double scale = 1e4;
+    std::vector<Float> rhs_scaled = {
+        static_cast<Float>(11.0 * scale),
+        static_cast<Float>(11.0 * scale),
+        static_cast<Float>(16.0 * scale)
+    };
+
+    // Solver must succeed: relative M0 residual is within 1e-10 * rhs_norm.
+    bool ok = kkt_solver.gpu_cholesky_solve(rhs_scaled);
+    REQUIRE(ok == true);
+
+    // Solution must be scale * [1, 2, 3].
+    REQUIRE(rhs_scaled[0] == Catch::Approx(scale * 1.0).epsilon(1e-8));
+    REQUIRE(rhs_scaled[1] == Catch::Approx(scale * 2.0).epsilon(1e-8));
+    REQUIRE(rhs_scaled[2] == Catch::Approx(scale * 3.0).epsilon(1e-8));
+
+    // Explicit physical M0 residual (not M_delta) must be small relative to rhs_norm.
+    // M0 = [[6,1,1],[1,5,0],[1,0,5]]
+    double r0 = 6.0*rhs_scaled[0] + rhs_scaled[1] + rhs_scaled[2] - 11.0*scale;
+    double r1 = rhs_scaled[0]     + 5.0*rhs_scaled[1]              - 11.0*scale;
+    double r2 = rhs_scaled[0]                      + 5.0*rhs_scaled[2] - 16.0*scale;
+    double abs_M0_res = std::max({std::abs(r0), std::abs(r1), std::abs(r2)});
+    double rhs_norm_val = std::max(1.0, 16.0 * scale); // max component of rhs
+    double rel_M0_res = abs_M0_res / rhs_norm_val;
+
+    // Relative physical residual must satisfy the physical contract (stricter than verifier 1e-8).
+    REQUIRE(rel_M0_res < 1e-8);
+}

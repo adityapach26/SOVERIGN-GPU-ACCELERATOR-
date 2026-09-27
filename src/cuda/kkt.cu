@@ -546,14 +546,19 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
-    // Physical M0 stopping tolerance.
-    // The verifier threshold on e1/e2 is 1e-8. We target M0 residual at 1e-10
-    // so the Schur-equation error is safely below what verify_newton_direction checks.
-    // This is an explicit numerical contract: the KKT solve must solve M0 dy = rhs,
-    // not merely M_delta dy = rhs.
-    constexpr Float kPhysicalResidualTol = 1e-10;
-    // Relative fallback: also accept if we have achieved machine-precision relative accuracy.
-    const Float stop_tol = std::min(kPhysicalResidualTol, 1e-10 * std::max(Float(1.0), rhs_norm));
+    // Physical relative residual contract: accept when
+    //   ||rhs - M0*dy|| / max(1, ||rhs||) <= kRelativeResidualTol
+    // i.e.: stop_tol = kRelativeResidualTol * max(1, rhs_norm).
+    //
+    // This is compatible with (and ~100x stricter than) verify_newton_direction's 1e-8.
+    // For large-RHS systems (e.g. rhs_norm ~4e5), the FP64 residual floor reaches
+    // ~1e-10, which is ~2.3e-16 relative -- well within this contract.
+    // An absolute floor of 1e-10 would incorrectly reject that floor as failure.
+    //
+    // The previous code used min(1e-10, 1e-10*max(1,rhs_norm)) which always equals
+    // 1e-10 (absolute), since max(1,rhs_norm)>=1. This is now corrected.
+    constexpr Float kRelativeResidualTol = 1e-10;
+    const Float stop_tol = kRelativeResidualTol * std::max(Float(1.0), rhs_norm);
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     
@@ -672,6 +677,15 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
                 compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
                 CHECK_CUDA(cudaDeviceSynchronize());
                 r0_norm_after = r0_norm_before; // restore for diagnostics
+
+                // IMPORTANT: Distinguish FP64-floor stagnation (Case D: success) from
+                // genuine factorization failure (Case B: failure requiring larger delta).
+                // If the relative residual is already within the physical contract,
+                // stagnation is the FP64 floor, NOT a factorization problem.
+                // Increasing delta would only introduce MORE regularization bias, not less.
+                if (r0_norm_before <= stop_tol) {
+                    refinement_converged = true;
+                }
                 break;
             }
             
@@ -683,16 +697,19 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             break;
         }
 
-        // Physical residual did not converge on this retry.
-        // Increasing delta helps Cholesky stability; a better-conditioned M_delta
-        // may allow the defect-correction loop to converge faster.
-        std::cout << "    [KKT] Physical refinement did not converge on retry " << retry << std::endl
+        // Physical refinement genuinely failed outside the relative contract (Case B).
+        // Increasing delta only helps if the factorization is poorly conditioned.
+        // Log with accurate names: physical_M0_residual, not "regularized".
+        const Float rel_residual = r0_norm_after / std::max(Float(1.0), rhs_norm);
+        std::cout << "    [KKT] Physical refinement stagnated outside contract on retry " << retry << std::endl
                   << "      delta: " << delta << std::endl
                   << "      rhs_norm: " << rhs_norm << std::endl
+                  << "      stop_tol (1e-10 * rhs_norm): " << stop_tol << std::endl
                   << "      initial_dy_norm: " << initial_dy_norm << std::endl
-                  << "      initial_M0_residual: " << initial_M0_residual << std::endl
+                  << "      initial_physical_M0_residual: " << initial_M0_residual << std::endl
                   << "      correction_norm: " << correction_norm << std::endl
-                  << "      final_M0_residual: " << r0_norm_after << std::endl;
+                  << "      final_physical_M0_residual: " << r0_norm_after << std::endl
+                  << "      relative_M0_residual: " << rel_residual << std::endl;
     }
     
     if (!success) {

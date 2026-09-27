@@ -415,22 +415,20 @@ private:
 
         kernels::compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
         
+        // Fold the known regularization contribution into d_r1 in-place.
+        // The system solved is (M + delta I) dy = rhs, so the exact primal
+        // Newton identity is:  A dx + rp + delta * dy = 0
+        // Adding delta*dy to d_r1 directly tests this identity rather than
+        // comparing two independently reduced norms.
+        int blocks_m = (m_ + 255) / 256;
+        kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, Float(1e-9), d_dy, d_r1);
+        CHECK_CUDA_IPM(cudaGetLastError());
+
         Float norm_r1 = kernels::compute_norm(m_, d_r1);
         Float norm_r2 = kernels::compute_norm(n_, d_r2);
         Float norm_r3 = kernels::compute_norm(n_, d_r3);
         Float norm_rxs = kernels::compute_norm(n_, d_r_xs);
-        
-        Float norm_dy = kernels::compute_norm(m_, d_dy);
-        Float delta_dy_allowance = (1e-9 * norm_dy) / std::max(Float(1.0), norm_rp);
-        // fp_guard: e1 and delta_dy_allowance evaluate the same mathematical quantity
-        // (||A dx + rp|| = delta * ||dy||) via two independent GPU reduction paths.
-        // The two paths differ by at most ~sqrt(m) * eps_mach in relative error.
-        // 8 * epsilon gives a conservative machine-precision-aware margin.
-        const Float fp_guard =
-            Float(8.0) * std::numeric_limits<Float>::epsilon()
-            * std::max(Float(1.0), delta_dy_allowance);
-        Float e1_threshold = std::max(Float(1e-8), delta_dy_allowance + fp_guard);
-        
+
         Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
         Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);
         Float e3 = norm_r3 / std::max(Float(1.0), norm_rxs);
@@ -442,11 +440,14 @@ private:
         cusparseDestroyDnVec(v_dy);
         cusparseDestroyDnVec(v_r1);
         cusparseDestroyDnVec(v_dx);
-        
-        if (model_.obj.size() == 138) { // ADLITTLE diagnostics
-            std::cout << "    [KKT Verify] e1=" << e1 << ", e2=" << e2 << ", e3=" << e3 << std::endl;
-        }
-        if (e1 > e1_threshold || e2 > 1e-8 || e3 > 1e-8) {
+
+        std::cout << "[KKT Verify]"
+                  << "  regularized_primal_residual: " << norm_r1
+                  << "  e1: " << e1
+                  << "  e2: " << e2
+                  << "  e3: " << e3
+                  << std::endl;
+        if (e1 > 1e-8 || e2 > 1e-8 || e3 > 1e-8) {
             std::cout << "    [KKT Verify] FAILED!" << std::endl;
             return false;
         }

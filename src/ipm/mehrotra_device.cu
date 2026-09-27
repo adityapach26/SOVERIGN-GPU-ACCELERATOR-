@@ -640,14 +640,11 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float dx_norm_p  = kernels::compute_norm(n_, d_dx_aff_);
         Float ds_norm_p  = kernels::compute_norm(n_, d_ds_aff_);
         
-        std::cout << "[PREDICTOR]
-"
-                  << "  rhs_norm: " << rhs_norm_p << "
-"
-                  << "  dx_norm: " << dx_norm_p << "
-"
-                  << "  ds_norm: " << ds_norm_p << "
-";
+        std::cout << "[PREDICTOR]"
+                  << "  dy_norm: " << dy_norm_p
+                  << "  dx_norm: " << dx_norm_p
+                  << "  ds_norm: " << ds_norm_p
+                  << std::endl;
 
         if (!verify_newton_direction(d_dx_aff_, d_r_kkt_, d_ds_aff_, d_r_xs_, norm_rp, norm_rd)) {
             result.status = simplex::SimplexStatus::Infeasible;
@@ -695,14 +692,11 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float dx_norm_c  = kernels::compute_norm(n_, d_dx_);
         Float ds_norm_c  = kernels::compute_norm(n_, d_ds_);
         
-        std::cout << "[CORRECTOR]
-"
-                  << "  rhs_norm: " << rhs_norm_c << "
-"
-                  << "  dx_norm: " << dx_norm_c << "
-"
-                  << "  ds_norm: " << ds_norm_c << "
-";
+        std::cout << "[CORRECTOR]"
+                  << "  dy_norm: " << dy_norm_c
+                  << "  dx_norm: " << dx_norm_c
+                  << "  ds_norm: " << ds_norm_c
+                  << std::endl;
 
         if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) {
             result.status = simplex::SimplexStatus::Infeasible;

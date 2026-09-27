@@ -96,6 +96,7 @@ private:
 
     // Device pointers for permutations
     Index* d_P_;
+    Float* d_D_;
 
     Index num_levels_;
     std::vector<Index> level_ptrs_;

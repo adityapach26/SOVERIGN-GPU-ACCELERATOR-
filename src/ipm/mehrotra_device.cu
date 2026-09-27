@@ -218,6 +218,43 @@ public:
 
         // Convert CSC model matrix to CSR for AMD/symbolic/KKT APIs
         A_csr_ = core::to_csr(model.A);
+        
+        b_scaled_ = model.rhs;
+        c_scaled_ = model.obj;
+        R_.assign(m_, 1.0);
+        C_.assign(n_, 1.0);
+
+        int num_ruiz_iters = 10;
+        for (int iter = 0; iter < num_ruiz_iters; ++iter) {
+            std::vector<Float> r_max(m_, 0.0);
+            std::vector<Float> c_max(n_, 0.0);
+            for (Index i = 0; i < m_; ++i) {
+                for (Index p = A_csr_.row_ptrs[i]; p < A_csr_.row_ptrs[i+1]; ++p) {
+                    Index j = A_csr_.col_indices[p];
+                    Float val = std::abs(A_csr_.values[p]);
+                    if (val > r_max[i]) r_max[i] = val;
+                    if (val > c_max[j]) c_max[j] = val;
+                }
+            }
+            for (Index i = 0; i < m_; ++i) {
+                Float factor = (r_max[i] > 1e-8) ? 1.0 / std::sqrt(r_max[i]) : 1.0;
+                R_[i] *= factor;
+                b_scaled_[i] *= factor;
+            }
+            for (Index j = 0; j < n_; ++j) {
+                Float factor = (c_max[j] > 1e-8) ? 1.0 / std::sqrt(c_max[j]) : 1.0;
+                C_[j] *= factor;
+                c_scaled_[j] *= factor;
+            }
+            for (Index i = 0; i < m_; ++i) {
+                for (Index p = A_csr_.row_ptrs[i]; p < A_csr_.row_ptrs[i+1]; ++p) {
+                    Index j = A_csr_.col_indices[p];
+                    Float factor_r = (r_max[i] > 1e-8) ? 1.0 / std::sqrt(r_max[i]) : 1.0;
+                    Float factor_c = (c_max[j] > 1e-8) ? 1.0 / std::sqrt(c_max[j]) : 1.0;
+                    A_csr_.values[p] *= factor_r * factor_c;
+                }
+            }
+        }
 
         std::vector<Index> P = compute_amd_ordering(A_csr_);
         compute_symbolic_factorization(A_csr_, P, sym_);
@@ -282,8 +319,8 @@ public:
 
         d_b_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
         d_c_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        CHECK_CUDA_IPM(cudaMemcpy(d_b_, model.rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
-        CHECK_CUDA_IPM(cudaMemcpy(d_c_, model.obj.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_b_, b_scaled_.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
+        CHECK_CUDA_IPM(cudaMemcpy(d_c_, c_scaled_.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice));
 
         // Upload CSR A for cuSPARSE SpMV
         d_A_row_ptrs_   = static_cast<Index*>(arena_.allocate((m_ + 1) * sizeof(Index)));
@@ -406,7 +443,9 @@ private:
     }
 
     const core::Model& model_;
-    core::CSRMatrix    A_csr_;       // CSR view of model.A for all GPU/symbolic APIs
+    core::CSRMatrix    A_csr_;
+    std::vector<Float> R_, C_;
+    std::vector<Float> b_scaled_, c_scaled_;
     gpu::VRAMArena     arena_;
     Index m_, n_;
     SymbolicFactorization sym_;
@@ -485,6 +524,8 @@ MehrotraResult MehrotraSolver::Impl::solve() {
             result.pi.resize(m_);
             CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
             CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+            for (Index i = 0; i < n_; ++i) result.x[i] *= C_[i];
+            for (Index i = 0; i < m_; ++i) result.pi[i] *= R_[i];
             
             return result;
         }
@@ -558,6 +599,92 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         alpha_p = std::min(1.0, eta * alpha_p);
         alpha_d = std::min(1.0, eta * alpha_d);
 
+        // Backtracking globalization
+        Float orig_rp_norm = norm_rp;
+        Float orig_rd_norm = norm_rd;
+        Float orig_mu = mu;
+        Float orig_merit = std::max({orig_rp_norm, orig_rd_norm, orig_mu});
+        
+        Float current_alpha_p = alpha_p;
+        Float current_alpha_d = alpha_d;
+        
+        Float* d_tmp_x = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        Float* d_tmp_y = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+        Float* d_tmp_s = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        Float* d_tmp_rp = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+        Float* d_tmp_rd = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        
+        cusparseDnVecDescr_t vec_tmp_x, vec_tmp_y, vec_tmp_rp, vec_tmp_rd;
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_tmp_x, n_, d_tmp_x, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_tmp_y, m_, d_tmp_y, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_tmp_rp, m_, d_tmp_rp, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_tmp_rd, n_, d_tmp_rd, CUDA_R_64F));
+        
+        int backtrack_iters = 0;
+        while (backtrack_iters < 15) {
+            CHECK_CUDA_IPM(cudaMemcpy(d_tmp_x, d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            CHECK_CUDA_IPM(cudaMemcpy(d_tmp_y, d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            CHECK_CUDA_IPM(cudaMemcpy(d_tmp_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            
+            kernels::update_variables(n_, current_alpha_p, d_dx_, d_tmp_x);
+            kernels::update_variables(n_, current_alpha_d, d_ds_, d_tmp_s);
+            kernels::update_variables(m_, current_alpha_d, d_r_kkt_, d_tmp_y);
+            
+            CHECK_CUDA_IPM(cudaMemcpy(d_tmp_rp, d_b_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            {
+                int blocks_m = (m_ + 255) / 256;
+                kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, -2.0, d_b_, d_tmp_rp);
+            }
+            Float a_spmv = 1.0, b_spmv = 1.0;
+            size_t buf1 = 0;
+            CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                &a_spmv, descr_A_, vec_tmp_x, &b_spmv, vec_tmp_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf1));
+            void* dbuf1 = arena_.allocate(buf1);
+            CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                &a_spmv, descr_A_, vec_tmp_x, &b_spmv, vec_tmp_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf1));
+            arena_.free(dbuf1);
+            
+            CHECK_CUDA_IPM(cudaMemcpy(d_tmp_rd, d_tmp_s, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            {
+                int blocks_n = (n_ + 255) / 256;
+                kernels::vector_add_kernel<<<blocks_n, 256>>>(n_, -1.0, d_c_, d_tmp_rd);
+            }
+            size_t buf2 = 0;
+            CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
+                &a_spmv, descr_A_, vec_tmp_y, &b_spmv, vec_tmp_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf2));
+            void* dbuf2 = arena_.allocate(buf2);
+            CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
+                &a_spmv, descr_A_, vec_tmp_y, &b_spmv, vec_tmp_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf2));
+            arena_.free(dbuf2);
+            
+            Float rp_new_norm = kernels::compute_norm(m_, d_tmp_rp);
+            Float rd_new_norm = kernels::compute_norm(n_, d_tmp_rd);
+            Float mu_new = kernels::compute_mu(n_, d_tmp_x, d_tmp_s);
+            
+            Float merit_new = std::max({rp_new_norm, rd_new_norm, mu_new});
+            
+            if (merit_new <= 1e4 * std::max(1.0, orig_merit)) {
+                break;
+            }
+            current_alpha_p *= 0.5;
+            current_alpha_d *= 0.5;
+            backtrack_iters++;
+        }
+        
+        cusparseDestroyDnVec(vec_tmp_x);
+        cusparseDestroyDnVec(vec_tmp_y);
+        cusparseDestroyDnVec(vec_tmp_rp);
+        cusparseDestroyDnVec(vec_tmp_rd);
+        
+        arena_.free(d_tmp_rd);
+        arena_.free(d_tmp_rp);
+        arena_.free(d_tmp_s);
+        arena_.free(d_tmp_y);
+        arena_.free(d_tmp_x);
+        
+        alpha_p = current_alpha_p;
+        alpha_d = current_alpha_d;
+
         // Update primal, dual, slack
         kernels::update_variables(n_, alpha_p, d_dx_, d_x_);
         kernels::update_variables(n_, alpha_d, d_ds_, d_s_);
@@ -585,6 +712,8 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     result.pi.resize(m_);
     CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
     CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    for (Index i = 0; i < n_; ++i) result.x[i] *= C_[i];
+    for (Index i = 0; i < m_; ++i) result.pi[i] *= R_[i];
     
     return result;
 }
@@ -603,3 +732,8 @@ MehrotraResult MehrotraSolver::solve() {
 
 } // namespace ipm
 } // namespace sankhya
+
+
+
+
+

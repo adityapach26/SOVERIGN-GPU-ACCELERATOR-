@@ -43,6 +43,46 @@ __global__ void inv_permute_vector_kernel(Index n, const Float* in, Float* out, 
     if (i < n) out[P[i]] = in[i];
 }
 
+__global__ void equilibrate_M_kernel(
+    Index m,
+    const Index* M_row_ptrs, const Index* M_col_indices, Float* M_vals,
+    Float* D
+) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= m) return;
+    
+    Float diag_val = 0.0;
+    for (Index p = M_row_ptrs[i]; p < M_row_ptrs[i+1]; ++p) {
+        if (M_col_indices[p] == i) {
+            diag_val = M_vals[p];
+            break;
+        }
+    }
+    
+    Float safe_floor = 1e-12;
+    D[i] = sqrt(max(abs(diag_val), safe_floor));
+}
+
+__global__ void scale_M_kernel(
+    Index m,
+    const Index* M_row_ptrs, const Index* M_col_indices, Float* M_vals,
+    const Float* D
+) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= m) return;
+    
+    Float d_i = D[i];
+    for (Index p = M_row_ptrs[i]; p < M_row_ptrs[i+1]; ++p) {
+        Index j = M_col_indices[p];
+        Float d_j = D[j];
+        M_vals[p] /= (d_i * d_j);
+    }
+}
+
+__global__ void scale_rhs_kernel(Index m, Float* rhs, const Float* D) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) rhs[i] /= D[i];
+}
 __global__ void compute_M_numerics_kernel(
     Index m, Index n,
     const Index* M_row_ptrs, const Index* M_col_indices, Float* M_values,
@@ -220,6 +260,8 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     // 4. Allocate and upload permutation P
     size_t P_bytes = m_ * sizeof(Index);
     d_P_ = static_cast<Index*>(arena_.allocate(P_bytes));
+
+    d_D_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     CHECK_CUDA(cudaMemcpy(d_P_, sym.P.data(), P_bytes, cudaMemcpyHostToDevice));
 
     // 5. Allocate intermediate vectors
@@ -383,6 +425,11 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     );
     CHECK_CUDA(cudaDeviceSynchronize());
 
+    equilibrate_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_D_);
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    scale_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, d_D_);
+    CHECK_CUDA(cudaDeviceSynchronize());
 
     // 2. Cholesky numerical factorization (M = LL^T)
     // [B] Engineering Decision: We implement a custom, exact, up-looking sparse Cholesky factorization
@@ -438,6 +485,9 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     permute_vector_kernel<<<blocks, threads>>>(m_, d_rhs_orig, d_rhs_perm, d_P_);
     CHECK_CUDA(cudaGetLastError());
 
+    scale_rhs_kernel<<<blocks, threads>>>(m_, d_rhs_perm, d_D_);
+    CHECK_CUDA(cudaGetLastError());
+
     // Create dense vector descriptors
     cusparseDnVecDescr_t vec_r, vec_z, vec_dy;
     Float alpha = 1.0;
@@ -471,6 +521,9 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
+    scale_rhs_kernel<<<blocks, threads>>>(m_, d_rhs_perm, d_D_);
+    CHECK_CUDA(cudaGetLastError());
+
     // Inverse permute \Delta y back to original ordering
     inv_permute_vector_kernel<<<blocks, threads>>>(m_, d_rhs_perm, d_rhs_orig, d_P_);
     CHECK_CUDA(cudaGetLastError());
@@ -485,3 +538,6 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
 
 } // namespace gpu
 } // namespace sankhya
+
+
+

@@ -425,10 +425,9 @@ private:
         Float norm_dx = kernels::compute_norm(n_, d_dx);
         Float norm_ds = kernels::compute_norm(n_, d_ds);
 
-        // Scale by the magnitude of the terms in the algebraic identity to accurately
-        // measure FP accumulation error in late iterations when dy, dx, ds are large.
-        Float e1 = norm_r1 / std::max({Float(1.0), norm_rp, norm_dx});
-        Float e2 = norm_r2 / std::max({Float(1.0), norm_rd, norm_ds});
+        // Measure FP accumulation error in late iterations
+        Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
+        Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);
         Float e3 = norm_r3 / std::max(Float(1.0), norm_rxs);
         
         arena_.free(d_r3);

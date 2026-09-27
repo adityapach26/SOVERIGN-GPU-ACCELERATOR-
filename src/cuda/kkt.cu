@@ -546,7 +546,11 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
-    Float stop_tol = 1e-10 * std::max(Float(1.0), rhs_norm);
+    // The KKT solver's absolute error injects directly into the primal/dual residuals.
+    // If rhs_norm is artificially huge (due to small s), scaling stop_tol by rhs_norm
+    // allows massive absolute errors, skipping iterative refinement and ruining the step.
+    // We strictly cap the tolerance to ensure the Newton step remains numerically valid.
+    Float stop_tol = std::min(Float(1e-10), 1e-10 * std::max(Float(1.0), rhs_norm));
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     

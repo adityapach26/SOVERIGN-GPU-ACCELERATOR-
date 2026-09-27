@@ -51,20 +51,13 @@ static void run_netlib_benchmark(const std::string& name, const std::string& pat
     std::cout << "Objective: "     << result.objective_value  << "\n";
     std::cout << "Primal Residual: " << result.primal_residual << "\n";
 
+    // Phase 33.1 requirement: Netlib models must solve successfully to optimality.
+    REQUIRE(result.status == simplex::SimplexStatus::Optimal);
+    
     // 5 & 6. Independent optimality certificate.
-    // The contract distinguishes three cases:
-    //   Optimal        -> run certificate, REQUIRE PASS
-    //   IterationLimit -> solver did not converge; do not claim optimality
-    //   Other          -> report only
-    if (result.status == simplex::SimplexStatus::Optimal) {
-        bool cert = verifier::verify_optimal(model, result.x, result.pi);
-        std::cout << "Certificate: " << (cert ? "PASS" : "FAIL") << "\n";
-        REQUIRE(cert);
-    } else if (result.status == simplex::SimplexStatus::IterationLimit) {
-        std::cout << "Certificate: NOT ATTEMPTED (solver did not converge)\n";
-    } else {
-        std::cout << "Certificate: NOT ATTEMPTED (solver status: " << status_str << ")\n";
-    }
+    bool cert = verifier::verify_optimal(model, result.x, result.pi);
+    std::cout << "Certificate: " << (cert ? "PASS" : "FAIL") << "\n";
+    REQUIRE(cert);
 }
 
 #ifndef SANKHYA_SOURCE_DIR

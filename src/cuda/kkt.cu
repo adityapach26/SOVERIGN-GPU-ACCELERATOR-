@@ -509,7 +509,7 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     }
 }
 
-void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
+bool GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
     if (static_cast<Index>(rhs.size()) != m_) {
         throw std::invalid_argument("rhs dimension mismatch");
     }
@@ -517,13 +517,14 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
     Float* d_rhs_orig = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     CHECK_CUDA(cudaMemcpy(d_rhs_orig, rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
     
-    gpu_cholesky_solve_device(d_rhs_orig);
+    bool success = gpu_cholesky_solve_device(d_rhs_orig);
     
     CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs_orig, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
     arena_.free(d_rhs_orig);
+    return success;
 }
 
-void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
+bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     int threads = 256;
     int blocks = (m_ + threads - 1) / threads;
 
@@ -657,6 +658,8 @@ void GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_r));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_z));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_dy));
+
+    return success;
 }
 
 } // namespace gpu

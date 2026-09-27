@@ -649,7 +649,11 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         std::cout << "[PREDICTOR] Pre-solve RHS norm: " << true_rhs_norm_p << std::endl;
 
         // Solve for dy_aff (result in d_r_kkt_ in-place)
-        kkt_->gpu_cholesky_solve_device(d_r_kkt_);
+        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) {
+            result.status = simplex::SimplexStatus::IterationLimit; // Numerical failure
+            result.iterations = iter;
+            break;
+        }
 
         // ds_aff = -rd - A^T dy_aff
         compute_ds(d_ds_aff_);
@@ -703,7 +707,11 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float true_rhs_norm_c = kernels::compute_norm(m_, d_r_kkt_);
         std::cout << "[CORRECTOR] Pre-solve RHS norm: " << true_rhs_norm_c << std::endl;
 
-        kkt_->gpu_cholesky_solve_device(d_r_kkt_);
+        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) {
+            result.status = simplex::SimplexStatus::IterationLimit; // Numerical failure
+            result.iterations = iter;
+            break;
+        }
 
         compute_ds(d_ds_);
         kernels::compute_dx(n_, d_Theta_, d_ds_, d_r_xs_, d_s_, d_dx_);

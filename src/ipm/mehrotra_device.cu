@@ -446,6 +446,23 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float norm_rd = kernels::compute_norm(n_, d_rd_);
         Float mu      = kernels::compute_mu(n_, d_x_, d_s_);
 
+        if (model_.obj.size() == 138) { // DIAGNOSTIC: only for adlittle
+            if (iter < 20 || iter >= 195) {
+                Float theta_min = 1e30, theta_max = 0.0;
+                if (iter > 0) { // d_Theta_ is populated after iter 0 starts
+                    thrust::device_ptr<const Float> pt(d_Theta_);
+                    theta_min = thrust::reduce(thrust::device, pt, pt + n_, Float(1e30), thrust::minimum<Float>());
+                    theta_max = thrust::reduce(thrust::device, pt, pt + n_, Float(-1e30), thrust::maximum<Float>());
+                }
+                std::cout << "  Iter " << iter 
+                          << " | rp: " << norm_rp 
+                          << " | rd: " << norm_rd 
+                          << " | mu: " << mu 
+                          << " | th_min: " << theta_min 
+                          << " | th_max: " << theta_max << std::endl;
+            }
+        }
+
         if (norm_rp < math::kDefaultFeasibilityTol &&
             norm_rd < math::kDefaultFeasibilityTol &&
             mu      < math::kDefaultFeasibilityTol) {
@@ -455,18 +472,20 @@ MehrotraResult MehrotraSolver::Impl::solve() {
             result.dual_residual   = norm_rd;
             result.duality_gap     = mu;
             result.objective_value = kernels::compute_objective(n_, d_c_, d_x_);
-            
-            result.x.resize(n_);
-            result.pi.resize(m_);
-            CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
-            CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
-            
             return result;
         }
 
         // ---- Predictor (affine scaling) step ----
         kernels::compute_theta(n_, d_x_, d_s_, d_Theta_);
-        kkt_->gpu_cholesky_factorize_device(d_Theta_);
+        
+        try {
+            kkt_->gpu_cholesky_factorize_device(d_Theta_);
+        } catch (const std::exception& e) {
+            if (model_.obj.size() == 138) {
+                std::cout << "  [ADLITTLE DIAGNOSTIC] Cholesky failed at iter " << iter << " with: " << e.what() << std::endl;
+            }
+            throw; // Rethrow to maintain existing behavior
+        }
 
         // r_xs_aff = -x * s  (sigma_mu = 0, no affine terms yet)
         kernels::compute_r_xs(n_, d_x_, d_s_, nullptr, nullptr, 0.0, d_r_xs_);
@@ -541,12 +560,6 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     result.dual_residual   = kernels::compute_norm(n_, d_rd_);
     result.duality_gap     = kernels::compute_mu(n_, d_x_, d_s_);
     result.objective_value = kernels::compute_objective(n_, d_c_, d_x_);
-    
-    result.x.resize(n_);
-    result.pi.resize(m_);
-    CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
-    
     return result;
 }
 

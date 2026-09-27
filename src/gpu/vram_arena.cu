@@ -75,7 +75,12 @@ void* VRAMArena::allocate(std::size_t bytes) {
             currently_allocated_ += aligned_size;
             allocated_blocks_[offset] = aligned_size;
             
-            return static_cast<char*>(d_base_ptr_) + offset;
+            void* ptr = static_cast<char*>(d_base_ptr_) + offset;
+            
+            // DIAGNOSTIC: Zero out memory to prevent non-deterministic contamination between tests
+            cudaMemset(ptr, 0, aligned_size);
+            
+            return ptr;
         }
         ++it;
     }

@@ -13,6 +13,8 @@
 #include <thrust/execution_policy.h>
 #include <cmath>
 
+namespace sankhya {
+namespace gpu {
 struct abs_max_functor {
     __host__ __device__
     Float operator()(const Float& x) const {
@@ -25,8 +27,6 @@ static Float compute_norm_kkt(Index n, const Float* d_vec) {
     return thrust::transform_reduce(thrust::device, ptr, ptr + n, abs_max_functor(), Float(0.0), thrust::maximum<Float>());
 }
 
-namespace sankhya {
-namespace gpu {
 // [ADR Phase 33.1] IPM normal-equations diagonal regularization.
 // M = A Theta A^T is theoretically PSD but late-iteration near-singularity
 // (x_i or s_i -> 0) and A rank-deficiency can cause Cholesky breakdown.

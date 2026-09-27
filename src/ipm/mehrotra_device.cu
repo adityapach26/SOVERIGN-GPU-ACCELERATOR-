@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 
 #define CHECK_CUDA_IPM(func)                                                   \
 {                                                                              \
@@ -564,6 +565,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     cudaDeviceSynchronize();
 
     Index max_iter = 200;
+    // Opt-in, bounded diagnostics for the small-LP globalization validation.
+    const bool trace_globalization = n_ < 200 && m_ < 200 &&
+                                     std::getenv("SANKHYA_IPM_TRACE") != nullptr;
+    int trace_trials_left = 96;
     for (Index iter = 0; iter < max_iter; ++iter) {
         compute_residuals();
         cudaDeviceSynchronize();
@@ -738,8 +743,13 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float alpha_p = std::min(Float(1.0), eta * alpha_p_max);
         Float alpha_d = std::min(Float(1.0), eta * alpha_d_max);
 
-        // Backtracking globalization
+        // The max merit need not descend along a Mehrotra direction with
+        // separate primal/dual steps. Use a sum so residual reduction can
+        // compensate for a temporary increase in complementarity. Armijo
+        // decrease of this sum still bounds every normalized component.
         Float orig_Phi = std::max({norm_rp / rp_scale0_, norm_rd / rd_scale0_, mu / mu_scale0_});
+        const Float orig_merit = norm_rp / rp_scale0_ + norm_rd / rd_scale0_ + mu / mu_scale0_;
+        constexpr Float armijo = 1e-4;
         
         Float current_alpha_p = alpha_p;
         Float current_alpha_d = alpha_d;
@@ -759,71 +769,122 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         int backtrack_iters = 0;
         bool step_accepted = false;
         
-        while (backtrack_iters < 15) {
-            CHECK_CUDA_IPM(cudaMemcpy(d_bt_x, d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            CHECK_CUDA_IPM(cudaMemcpy(d_bt_y, d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            CHECK_CUDA_IPM(cudaMemcpy(d_bt_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            
-            kernels::update_variables(n_, current_alpha_p, d_dx_, d_bt_x);
-            kernels::update_variables(n_, current_alpha_d, d_ds_, d_bt_s);
-            kernels::update_variables(m_, current_alpha_d, d_r_kkt_, d_bt_y); // d_r_kkt_ contains dy
-            
-            CHECK_CUDA_IPM(cudaMemcpy(d_bt_rp, d_b_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            {
-                int blocks_m = (m_ + 255) / 256;
-                kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, -2.0, d_b_, d_bt_rp);
+        for (int direction = 0; direction < 2 && !step_accepted; ++direction) {
+            if (direction == 1) {
+                // Centered safeguard, using exactly the existing elimination:
+                // S dx + X ds = -X s + sigma_c * mu * e,
+                // ds = -rd - A^T dy, dx = -Theta ds + r_xs / s,
+                // (A Theta A^T) dy = -rp + A(-Theta rd - r_xs / s).
+                // sigma_c = 1/2 retains half the average complementarity as
+                // a positive centering target and removes half per unit step.
+                // With a COMMON step: rp'=-rp, rd'=-rd, mu'=-mu/2, hence
+                // merit' <= -merit/2. No affine cross term belongs in this RHS.
+                constexpr Float sigma_c = 0.5;
+                kernels::compute_r_xs(n_, d_x_, d_s_, nullptr, nullptr, sigma_c * mu, d_r_xs_);
+                kernels::compute_v(n_, d_Theta_, d_rd_, d_r_xs_, d_s_, d_v_);
+                compute_rkkt();
+                if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) break;
+                compute_ds(d_ds_);
+                kernels::compute_dx(n_, d_Theta_, d_ds_, d_r_xs_, d_s_, d_dx_);
+                if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) break;
+
+                const Float boundary = std::min(kernels::compute_step_length(n_, d_x_, d_dx_),
+                                                kernels::compute_step_length(n_, d_s_, d_ds_));
+                current_alpha_p = current_alpha_d = std::min(Float(1.0), eta * boundary);
             }
-            Float a_spmv = 1.0, b_spmv = 1.0;
-            size_t buf1 = 0;
-            CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf1));
-            void* dbuf1 = arena_.allocate(buf1);
-            CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf1));
-            arena_.free(dbuf1);
-            
-            CHECK_CUDA_IPM(cudaMemcpy(d_bt_rd, d_bt_s, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            {
-                int blocks_n = (n_ + 255) / 256;
-                kernels::vector_add_kernel<<<blocks_n, 256>>>(n_, -1.0, d_c_, d_bt_rd);
+            backtrack_iters = 0;
+            const int max_backtracks = direction == 0 ? 15 : 30;
+            while (backtrack_iters < max_backtracks) {
+                CHECK_CUDA_IPM(cudaMemcpy(d_bt_x, d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                CHECK_CUDA_IPM(cudaMemcpy(d_bt_y, d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                CHECK_CUDA_IPM(cudaMemcpy(d_bt_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+
+                kernels::update_variables(n_, current_alpha_p, d_dx_, d_bt_x);
+                kernels::update_variables(n_, current_alpha_d, d_ds_, d_bt_s);
+                kernels::update_variables(m_, current_alpha_d, d_r_kkt_, d_bt_y); // d_r_kkt_ contains dy
+
+                CHECK_CUDA_IPM(cudaMemcpy(d_bt_rp, d_b_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                {
+                    int blocks_m = (m_ + 255) / 256;
+                    kernels::vector_add_kernel<<<blocks_m, 256>>>(m_, -2.0, d_b_, d_bt_rp);
+                }
+                Float a_spmv = 1.0, b_spmv = 1.0;
+                size_t buf1 = 0;
+                CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                    &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf1));
+                void* dbuf1 = arena_.allocate(buf1);
+                CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                    &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf1));
+                arena_.free(dbuf1);
+
+                CHECK_CUDA_IPM(cudaMemcpy(d_bt_rd, d_bt_s, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                {
+                    int blocks_n = (n_ + 255) / 256;
+                    kernels::vector_add_kernel<<<blocks_n, 256>>>(n_, -1.0, d_c_, d_bt_rd);
+                }
+                size_t buf2 = 0;
+                CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
+                    &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf2));
+                void* dbuf2 = arena_.allocate(buf2);
+                CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
+                    &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf2));
+                arena_.free(dbuf2);
+
+                Float rp_new_norm = kernels::compute_norm(m_, d_bt_rp);
+                Float rd_new_norm = kernels::compute_norm(n_, d_bt_rd);
+                Float mu_new = kernels::compute_mu(n_, d_bt_x, d_bt_s);
+
+                Float Phi_new = std::max({rp_new_norm / rp_scale0_, rd_new_norm / rd_scale0_, mu_new / mu_scale0_});
+
+                thrust::device_ptr<Float> ptr_x(d_bt_x);
+                thrust::device_ptr<Float> ptr_s(d_bt_s);
+                Float min_x = thrust::reduce(thrust::device, ptr_x, ptr_x + n_, Float(1.0e30), thrust::minimum<Float>());
+                Float min_s = thrust::reduce(thrust::device, ptr_s, ptr_s + n_, Float(1.0e30), thrust::minimum<Float>());
+
+                const Float merit_new = rp_new_norm / rp_scale0_ + rd_new_norm / rd_scale0_ + mu_new / mu_scale0_;
+                const Float step = std::min(current_alpha_p, current_alpha_d);
+                const bool finite = std::isfinite(rp_new_norm) && std::isfinite(rd_new_norm) &&
+                                    std::isfinite(mu_new) && std::isfinite(merit_new) &&
+                                    std::isfinite(orig_merit) && std::isfinite(min_x) && std::isfinite(min_s) &&
+                                    std::isfinite(current_alpha_p) && std::isfinite(current_alpha_d) &&
+                                    std::isfinite(kernels::compute_norm(m_, d_bt_y));
+                const bool positive = min_x > 0.0 && min_s > 0.0 && mu_new > 0.0 && step > 0.0;
+                const bool progress = merit_new < orig_merit &&
+                                      merit_new <= (1.0 - armijo * step) * orig_merit;
+                const char* reason = !finite ? "reject: non-finite trial" :
+                                     !positive ? "reject: positivity/step" :
+                                     !progress ? "reject: insufficient merit decrease" : "accept";
+                if (trace_globalization && trace_trials_left > 0) {
+                    --trace_trials_left;
+                    std::cout << "    [Globalization] " << (direction == 0 ? "Mehrotra" : "Centered")
+                              << " iter " << iter << " bt " << backtrack_iters << ": " << reason << std::endl
+                              << "      a_p: " << current_alpha_p << " a_d: " << current_alpha_d << std::endl
+                              << "      min(x+adx): " << min_x << " min(s+ads): " << min_s << std::endl
+                              << "      rp_before: " << norm_rp << " rp_after: " << rp_new_norm << std::endl
+                              << "      rd_before: " << norm_rd << " rd_after: " << rd_new_norm << std::endl
+                              << "      mu_before: " << mu << " mu_after: " << mu_new << std::endl
+                              << "      Phi_before: " << orig_Phi << " Phi_after: " << Phi_new << std::endl
+                              << "      merit_before: " << orig_merit << " merit_after: " << merit_new << std::endl;
+                }
+
+                if (finite && positive && progress) {
+                    step_accepted = true;
+                    break;
+                }
+
+                current_alpha_p *= 0.5;
+                current_alpha_d *= 0.5;
+                backtrack_iters++;
             }
-            size_t buf2 = 0;
-            CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
-                &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf2));
-            void* dbuf2 = arena_.allocate(buf2);
-            CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
-                &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf2));
-            arena_.free(dbuf2);
-            
-            Float rp_new_norm = kernels::compute_norm(m_, d_bt_rp);
-            Float rd_new_norm = kernels::compute_norm(n_, d_bt_rd);
-            Float mu_new = kernels::compute_mu(n_, d_bt_x, d_bt_s);
-            
-            Float Phi_new = std::max({rp_new_norm / rp_scale0_, rd_new_norm / rd_scale0_, mu_new / mu_scale0_});
-            
-            thrust::device_ptr<Float> ptr_x(d_bt_x);
-            thrust::device_ptr<Float> ptr_s(d_bt_s);
-            Float min_x = thrust::reduce(thrust::device, ptr_x, ptr_x + n_, Float(1.0e30), thrust::minimum<Float>());
-            Float min_s = thrust::reduce(thrust::device, ptr_s, ptr_s + n_, Float(1.0e30), thrust::minimum<Float>());
-            
-            if (n_ < 200) {
-                // AFIRO / ADLITTLE diagnostics
-                std::cout << "    [Diag] iter " << iter << " bt " << backtrack_iters << ":" << std::endl
-                          << "      a_p: " << current_alpha_p << " a_d: " << current_alpha_d << std::endl
-                          << "      min(x+adx): " << min_x << " min(s+ads): " << min_s << std::endl
-                          << "      mu_before: " << mu << " mu_after: " << mu_new << std::endl
-                          << "      Phi_before: " << orig_Phi << " Phi_after: " << Phi_new << std::endl;
-            }
-            
-            // Accept step if strictly positive and merit function does not grow significantly
-            if (min_x > 0.0 && min_s > 0.0 && Phi_new <= (1.0 + 1e-4) * orig_Phi) {
-                step_accepted = true;
-                break;
-            }
-            
-            current_alpha_p *= 0.5;
-            current_alpha_d *= 0.5;
-            backtrack_iters++;
+        }
+
+        // Commit the exact trial that passed all checks; failed searches leave
+        // the current iterate untouched (including a failed safeguard solve).
+        if (step_accepted) {
+            CHECK_CUDA_IPM(cudaMemcpy(d_x_, d_bt_x, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            CHECK_CUDA_IPM(cudaMemcpy(d_y_, d_bt_y, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            CHECK_CUDA_IPM(cudaMemcpy(d_s_, d_bt_s, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            CHECK_CUDA_IPM(cudaDeviceSynchronize());
         }
         
         cusparseDestroyDnVec(vec_bt_x);
@@ -845,12 +906,6 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         
         alpha_p = current_alpha_p;
         alpha_d = current_alpha_d;
-
-        // Update primal, dual, slack
-        kernels::update_variables(n_, alpha_p, d_dx_, d_x_);
-        kernels::update_variables(n_, alpha_d, d_ds_, d_s_);
-        kernels::update_variables(m_, alpha_d, d_r_kkt_, d_y_); // d_r_kkt_ contains dy
-        cudaDeviceSynchronize();
 
         if (model_.obj.size() == 138 && (iter % 10 == 0 || iter >= 195)) {
             std::cout << "    sigma: " << sigma 

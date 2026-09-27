@@ -446,21 +446,29 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float norm_rd = kernels::compute_norm(n_, d_rd_);
         Float mu      = kernels::compute_mu(n_, d_x_, d_s_);
 
-        if (model_.obj.size() == 138) { // DIAGNOSTIC: only for adlittle
-            if (iter < 20 || iter >= 195) {
-                Float theta_min = 1e30, theta_max = 0.0;
-                if (iter > 0) { // d_Theta_ is populated after iter 0 starts
-                    thrust::device_ptr<const Float> pt(d_Theta_);
-                    theta_min = thrust::reduce(thrust::device, pt, pt + n_, Float(1e30), thrust::minimum<Float>());
-                    theta_max = thrust::reduce(thrust::device, pt, pt + n_, Float(-1e30), thrust::maximum<Float>());
-                }
-                std::cout << "  Iter " << iter 
-                          << " | rp: " << norm_rp 
-                          << " | rd: " << norm_rd 
-                          << " | mu: " << mu 
-                          << " | th_min: " << theta_min 
-                          << " | th_max: " << theta_max << std::endl;
+        if (model_.obj.size() == 138 && (iter % 10 == 0 || iter >= 195)) { // DIAGNOSTIC: only for adlittle
+            Float theta_min = 1e30, theta_max = 0.0;
+            Float x_min = 1e30, x_max = -1e30;
+            Float s_min = 1e30, s_max = -1e30;
+            if (iter > 0) { // d_Theta_ is populated after iter 0 starts
+                thrust::device_ptr<const Float> pt(d_Theta_);
+                theta_min = thrust::reduce(thrust::device, pt, pt + n_, Float(1e30), thrust::minimum<Float>());
+                theta_max = thrust::reduce(thrust::device, pt, pt + n_, Float(-1e30), thrust::maximum<Float>());
             }
+            thrust::device_ptr<const Float> px(d_x_), ps(d_s_);
+            x_min = thrust::reduce(thrust::device, px, px + n_, Float(1e30), thrust::minimum<Float>());
+            x_max = thrust::reduce(thrust::device, px, px + n_, Float(-1e30), thrust::maximum<Float>());
+            s_min = thrust::reduce(thrust::device, ps, ps + n_, Float(1e30), thrust::minimum<Float>());
+            s_max = thrust::reduce(thrust::device, ps, ps + n_, Float(-1e30), thrust::maximum<Float>());
+            
+            std::cout << "  Iter " << iter 
+                      << " | rp: " << norm_rp 
+                      << " | rd: " << norm_rd 
+                      << " | mu: " << mu 
+                      << " | th_min: " << theta_min 
+                      << " | th_max: " << theta_max 
+                      << " | x_min: " << x_min << " | x_max: " << x_max
+                      << " | s_min: " << s_min << " | s_max: " << s_max << std::endl;
         }
 
         if (norm_rp < math::kDefaultFeasibilityTol &&
@@ -526,7 +534,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         arena_.free(d_tmp_s);
         arena_.free(d_tmp_x);
 
-        Float sigma = std::pow(std::max(0.0, mu_aff) / std::max(1e-16, mu), 3.0);
+        Float sigma = std::min(1.0, std::pow(std::max(0.0, mu_aff) / std::max(1e-16, mu), 3.0));
 
         // ---- Corrector step ----
         // r_xs = -x*s + sigma*mu - dx_aff * ds_aff
@@ -555,6 +563,12 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         kernels::update_variables(n_, alpha_d, d_ds_, d_s_);
         kernels::update_variables(m_, alpha_d, d_r_kkt_, d_y_); // d_r_kkt_ contains dy
         cudaDeviceSynchronize();
+
+        if (model_.obj.size() == 138 && (iter % 10 == 0 || iter >= 195)) {
+            std::cout << "    sigma: " << sigma 
+                      << " | a_p_aff: " << alpha_p_aff << " | a_d_aff: " << alpha_d_aff
+                      << " | a_p: " << alpha_p << " | a_d: " << alpha_d << std::endl;
+        }
     }
 
     // Iteration limit

@@ -56,16 +56,15 @@ public:
      * @brief Solves LL^T \Delta y = rhs on the GPU.
      * 
      * @param rhs RHS vector. Will be overwritten with solution.
-     * @return true if solved successfully, false if numerical breakdown occurred.
      */
-    bool gpu_cholesky_solve(std::vector<Float>& rhs);
+    void gpu_cholesky_solve(std::vector<Float>& rhs);
 
     /**
      * [B] Engineering Decision: Expose device-resident versions for the Mehrotra IPM loop
      * to avoid full host-device round-trips for every IPM iteration.
      */
     void gpu_cholesky_factorize_device(const Float* d_Theta);
-    bool gpu_cholesky_solve_device(Float* d_rhs);
+    void gpu_cholesky_solve_device(Float* d_rhs);
 
     // Expose device pointers for testing and verification
     Float* get_device_L_values() const { return d_L_vals_; }

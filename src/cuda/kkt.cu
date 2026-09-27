@@ -537,12 +537,10 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     Float* d_r_perm = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     Float* d_correction = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     
-    cusparseDnVecDescr_t vec_rhs, vec_r, vec_z, vec_dy, vec_correction;
-    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_rhs, m_, d_rhs_perm_orig, CUDA_R_64F));
+    cusparseDnVecDescr_t vec_r, vec_z, vec_dy;
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_r, m_, d_r_perm, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_z, m_, d_z_, CUDA_R_64F));
-    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_dy, m_, d_dy_perm, CUDA_R_64F));
-    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_correction, m_, d_correction, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_dy, m_, d_correction, CUDA_R_64F));
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
@@ -587,92 +585,70 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             }
         }
         
-        // Explicitly zero working vectors before solve paths
         CHECK_CUDA(cudaMemset(d_dy_perm, 0, m_ * sizeof(Float)));
-        CHECK_CUDA(cudaMemset(d_correction, 0, m_ * sizeof(Float)));
-        CHECK_CUDA(cudaMemset(d_z_, 0, m_ * sizeof(Float)));
-        CHECK_CUDA(cudaMemset(d_r_perm, 0, m_ * sizeof(Float)));
-
-        // --- INITIAL SOLVE: Mdelta * dy = rhs ---
-        // Analyze and solve using vec_rhs -> vec_z -> vec_dy
-        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_rhs, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
-        CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_rhs, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
-        CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
-        
-        Float initial_dy_norm = compute_norm_kkt(m_, d_dy_perm);
-
-        // --- COMPUTE INITIAL RESIDUAL: r = rhs - M0 * dy ---
-        compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        
-        Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
-        Float initial_M0_residual = r_norm_before;
-        
-        if (r_norm_before <= stop_tol) {
-            success = true;
-            break;
-        }
-        
         bool refinement_converged = false;
-        Float correction_norm = 0.0;
-        Float r_norm_after = r_norm_before;
+        bool refinement_deteriorated = false;
         
-        // --- ITERATIVE REFINEMENT ---
         for (int iter = 0; iter < 5; ++iter) {
-            // Backup current dy before applying correction
-            CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-            
-            // Solve Mdelta * correction = r
-            if (iter == 0) {
-                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
-            }
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-            
-            if (iter == 0) {
-                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_correction, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
-            }
-            CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_correction, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
-            
-            correction_norm = compute_norm_kkt(m_, d_correction);
-            
-            // dy += correction
-            add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
-            CHECK_CUDA(cudaDeviceSynchronize());
-            
-            // r = rhs - M0 * dy
+            // Compute residual against M0, not Mdelta
             compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            r_norm_after = compute_norm_kkt(m_, d_r_perm);
+            Float r_norm_before = compute_norm_kkt(m_, d_r_perm);
+            
+            if (r_norm_before <= stop_tol) {
+                refinement_converged = true;
+                break;
+            }
+            
+            // Backup current solution before applying correction
+            CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+            
+            // SpSV analysis must be re-run if values change (retry > 0)
+            if (iter == 0) {
+                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
+                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
+            } else {
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
+                CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
+            }
+            
+            add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            
+            // Compute residual against M0 after correction
+            compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            Float r_norm_after = compute_norm_kkt(m_, d_r_perm);
             
             if (r_norm_after <= stop_tol) {
                 refinement_converged = true;
                 break;
             }
-            
+
             if (r_norm_after >= r_norm_before) {
-                // Reject correction
                 CHECK_CUDA(cudaMemcpy(d_dy_perm, d_dy_backup, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+                std::cout << "    [KKT Refinement] Deteriorated on retry " << retry << std::endl
+                          << "      delta: " << delta << std::endl
+                          << "      res_before(M0): " << r_norm_before << std::endl
+                          << "      res_after(M0): " << r_norm_after << std::endl
+                          << "      converged: false (rejecting correction)" << std::endl;
+                refinement_deteriorated = true;
                 break;
             }
-            
-            r_norm_before = r_norm_after;
         }
         
         if (refinement_converged) {
             success = true;
             break;
+        } else if (!refinement_deteriorated) {
+            // It exhausted iteration count without hitting deterioration OR convergence
+            std::cout << "    [KKT Refinement] Exhausted iterations on retry " << retry << std::endl
+                      << "      delta: " << delta << std::endl
+                      << "      converged: false (moving to next retry)" << std::endl;
         }
-        
-        // Print the requested diagnostics for one failed retry:
-        std::cout << "    [KKT] Refinement failed on retry " << retry << std::endl
-                  << "      delta: " << delta << std::endl
-                  << "      rhs_norm: " << rhs_norm << std::endl
-                  << "      initial_dy_norm: " << initial_dy_norm << std::endl
-                  << "      initial_M0_residual: " << initial_M0_residual << std::endl
-                  << "      correction_norm: " << correction_norm << std::endl
-                  << "      post_correction_M0_residual: " << r_norm_after << std::endl;
     }
     
     if (!success) {
@@ -689,11 +665,9 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     arena_.free(d_dy_perm);
     arena_.free(d_rhs_perm_orig);
     
-    CHECK_CUSPARSE(cusparseDestroyDnVec(vec_rhs));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_r));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_z));
     CHECK_CUSPARSE(cusparseDestroyDnVec(vec_dy));
-    CHECK_CUSPARSE(cusparseDestroyDnVec(vec_correction));
 
     return success;
 }

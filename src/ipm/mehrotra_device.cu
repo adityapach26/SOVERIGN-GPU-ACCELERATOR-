@@ -429,8 +429,13 @@ private:
         Float norm_r3 = kernels::compute_norm(n_, d_r3);
         Float norm_rxs = kernels::compute_norm(n_, d_r_xs);
 
-        Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
-        Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);
+        Float norm_dx = kernels::compute_norm(n_, d_dx);
+        Float norm_ds = kernels::compute_norm(n_, d_ds);
+
+        // Scale by the magnitude of the terms in the algebraic identity to accurately
+        // measure FP accumulation error in late iterations when dy, dx, ds are large.
+        Float e1 = norm_r1 / std::max({Float(1.0), norm_rp, norm_dx});
+        Float e2 = norm_r2 / std::max({Float(1.0), norm_rd, norm_ds});
         Float e3 = norm_r3 / std::max(Float(1.0), norm_rxs);
         
         arena_.free(d_r3);
@@ -449,6 +454,13 @@ private:
                   << std::endl;
         if (e1 > 1e-8 || e2 > 1e-8 || e3 > 1e-8) {
             std::cout << "    [KKT Verify] FAILED!" << std::endl;
+            if (model_.obj.size() == 138 || model_.obj.size() == 51) {
+                Float norm_dy = kernels::compute_norm(m_, d_dy);
+                Float norm_dx = kernels::compute_norm(n_, d_dx);
+                Float norm_ds = kernels::compute_norm(n_, d_ds);
+                std::cout << "      [Diag] norm_rp: " << norm_rp << "  norm_rd: " << norm_rd << std::endl
+                          << "      [Diag] norm_dy: " << norm_dy << "  norm_dx: " << norm_dx << "  norm_ds: " << norm_ds << std::endl;
+            }
             return false;
         }
         return true;

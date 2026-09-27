@@ -6,6 +6,25 @@
 #include <stdexcept>
 #include <iostream>
 
+#include <thrust/reduce.h>
+#include <thrust/device_ptr.h>
+#include <thrust/extrema.h>
+#include <thrust/transform_reduce.h>
+#include <thrust/execution_policy.h>
+#include <cmath>
+
+struct abs_max_functor {
+    __host__ __device__
+    Float operator()(const Float& x) const {
+        return x < 0.0 ? -x : x;
+    }
+};
+
+static Float compute_norm_kkt(Index n, const Float* d_vec) {
+    thrust::device_ptr<const Float> ptr(d_vec);
+    return thrust::transform_reduce(thrust::device, ptr, ptr + n, abs_max_functor(), Float(0.0), thrust::maximum<Float>());
+}
+
 namespace sankhya {
 namespace gpu {
 // [ADR Phase 33.1] IPM normal-equations diagonal regularization.

@@ -6,18 +6,20 @@ import time
 
 from external_baselines.highs_wrapper import solve_mps as highs_solve
 
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def find_cli():
     # Search all common build directories
     possible_dirs = [
-        os.path.join(REPO_ROOT, 'build'),
         os.path.join(REPO_ROOT, 'build', 'tests'),
         os.path.join(REPO_ROOT, 'build', 'tests', 'benchmark'),
         os.path.join(REPO_ROOT, 'build', 'tests', 'Release'),
         os.path.join(REPO_ROOT, 'build', 'tests', 'Debug'),
         os.path.join(REPO_ROOT, 'build', 'Release'),
-        os.path.join(REPO_ROOT, 'build', 'Debug')
+        os.path.join(REPO_ROOT, 'build', 'Debug'),
+        os.path.join(REPO_ROOT, 'build'),
+        "/content/SOVERIGN-GPU-ACCELERATOR-/build/tests"
     ]
     
     bin_names = ['sankhya_benchmark_cli', 'sankhya_benchmark_cli.exe']
@@ -33,17 +35,32 @@ CLI_PATH = find_cli()
 
 def sankhya_solve(mps_path):
     if not CLI_PATH or not os.path.exists(CLI_PATH):
-        return {'solver': 'SANKHYA', 'status': 'Executable Not Found'}
+        return {'solver': 'SANKHYA', 'status': 'Executable Not Found', 'solve_time_ms': 0.0, 'iterations': 0}
     try:
+        start_time = time.perf_counter()
+        # Add executable permission just in case
+        if os.name != 'nt':
+            os.chmod(CLI_PATH, 0o755)
+            
         result = subprocess.run([CLI_PATH, mps_path], capture_output=True, text=True, check=False)
+        end_time = time.perf_counter()
+        wall_time_ms = round((end_time - start_time) * 1000, 3)
+        
         try:
-            res = json.loads(result.stdout)
-            # Ensure required fields exist
-            res.setdefault('solve_time_ms', 0.0)
-            res.setdefault('iterations', 0)
-            return res
-        except:
-            return {'solver': 'SANKHYA', 'status': 'Failed', 'error': result.stderr, 'solve_time_ms': 0.0, 'iterations': 0}
+            # Extract JSON block robustly in case of stray stdout lines
+            out_str = result.stdout
+            json_start = out_str.find('{')
+            json_end = out_str.rfind('}')
+            if json_start != -1 and json_end != -1:
+                res = json.loads(out_str[json_start:json_end+1])
+                # Preserve internal SANKHYA timing if present
+                res.setdefault('solve_time_ms', wall_time_ms)
+                res.setdefault('iterations', 0)
+                return res
+            else:
+                return {'solver': 'SANKHYA', 'status': 'Failed', 'error': 'No JSON output', 'solve_time_ms': wall_time_ms, 'iterations': 0}
+        except Exception as e:
+            return {'solver': 'SANKHYA', 'status': 'Failed', 'error': str(e), 'solve_time_ms': wall_time_ms, 'iterations': 0}
     except Exception as e:
         return {'solver': 'SANKHYA', 'status': 'Failed', 'error': str(e), 'solve_time_ms': 0.0, 'iterations': 0}
 

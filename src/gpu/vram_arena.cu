@@ -5,7 +5,8 @@
  * @brief CUDA Memory Pool / Persistent VRAM Arena implementation (Step 9.1)
  */
 
-#include "vram_arena.cuh"`n#include "../profiler.hpp"
+#include "vram_arena.cuh"
+#include "../profiler.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>

@@ -509,7 +509,7 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     }
 }
 
-bool GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
+bool GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs, Float required_abs_tol) {
     if (static_cast<Index>(rhs.size()) != m_) {
         throw std::invalid_argument("rhs dimension mismatch");
     }
@@ -517,14 +517,14 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve(std::vector<Float>& rhs) {
     Float* d_rhs_orig = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     CHECK_CUDA(cudaMemcpy(d_rhs_orig, rhs.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
     
-    bool success = gpu_cholesky_solve_device(d_rhs_orig);
+    bool success = gpu_cholesky_solve_device(d_rhs_orig, required_abs_tol);
     
     CHECK_CUDA(cudaMemcpy(rhs.data(), d_rhs_orig, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
     arena_.free(d_rhs_orig);
     return success;
 }
 
-bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
+bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float required_abs_tol) {
     int threads = 256;
     int blocks = (m_ + threads - 1) / threads;
 
@@ -546,23 +546,9 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
     
     Float alpha = 1.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
-    // Physical relative residual contract: accept when
-    //   ||rhs - M0*dy|| / max(1, ||rhs||) <= kRelativeResidualTol
-    // i.e.: stop_tol = kRelativeResidualTol * max(1, rhs_norm).
-    //
-    // This is compatible with (and ~100x stricter than) verify_newton_direction's 1e-8.
-    // For large-RHS systems (e.g. rhs_norm ~4e5), the FP64 residual floor reaches
-    // ~1e-10, which is ~2.3e-16 relative -- well within this contract.
-    // An absolute floor of 1e-10 would incorrectly reject that floor as failure.
-    //
-    // The previous code used min(1e-10, 1e-10*max(1,rhs_norm)) which always equals
-    // 1e-10 (absolute), since max(1,rhs_norm)>=1. This is now corrected.
-    constexpr Float kRelativeResidualTol = 1e-10;
-    const Float stop_tol = kRelativeResidualTol * std::max(Float(1.0), rhs_norm);
+    
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
-    
-    Float* d_dy_backup = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     
     for (int retry = 0; retry < 5; ++retry) {
         if (retry > 0) {
@@ -594,7 +580,8 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
             
             CHECK_CUDA(cudaMemcpy(&h_error, d_factorization_error_, sizeof(int), cudaMemcpyDeviceToHost));
             if (h_error > 0) {
-                std::cout << "    [Retry] Factorization failed at delta = " << delta << std::endl;
+                std::cout << "    [KKT] Factorization failed at delta = " << delta << std::endl;
+                std::cout << "    [KKT] REFINEMENT_EXIT=FACTORIZATION_FAILURE" << std::endl;
                 continue; // Next retry
             }
         }
@@ -614,102 +601,80 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig) {
         
         Float initial_dy_norm = compute_norm_kkt(m_, d_dy_perm);
 
-        // --- COMPUTE INITIAL PHYSICAL RESIDUAL: r0 = rhs - M0 * dy ---
-        // This is the residual of the equation we ACTUALLY want to solve.
-        // The regularization bias is delta*dy: r0 = r_delta + delta*dy.
-        // Iterative refinement against M_delta (as preconditioner) will eliminate this bias.
+        // --- COMPUTE INITIAL PHYSICAL UNREGULARIZED RESIDUAL: r0 = rhs - M0 * dy ---
         compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
         CHECK_CUDA(cudaDeviceSynchronize());
         
         Float r0_norm_before = compute_norm_kkt(m_, d_r_perm);
         Float initial_M0_residual = r0_norm_before;
         
-        if (r0_norm_before <= stop_tol) {
+        std::cout << "    [KKT] --- Retry " << retry << " ---" << std::endl;
+        std::cout << "    [KKT] delta: " << delta << std::endl;
+        std::cout << "    [KKT] rhs_norm: " << rhs_norm << std::endl;
+        std::cout << "    [KKT] dy_norm: " << initial_dy_norm << std::endl;
+        std::cout << "    [KKT] required_abs_tol: " << required_abs_tol << std::endl;
+        std::cout << "    [KKT] initial_M0_residual: " << initial_M0_residual << std::endl;
+        
+        if (r0_norm_before <= required_abs_tol) {
+            std::cout << "    [KKT] REFINEMENT_EXIT=SKIPPED" << std::endl;
             success = true;
             break;
         }
-        
+
+        // --- ITERATIVE REFINEMENT FOR PHYSICAL RESIDUAL ---
+        int max_refinement_iters = 10;
         bool refinement_converged = false;
-        Float correction_norm = 0.0;
         Float r0_norm_after = r0_norm_before;
+        int iter = 0;
+        Float correction_norm = 0.0;
+        const char* exit_reason = "MAX_ITERS";
         
-        // --- ITERATIVE REFINEMENT: Defect Correction targeting M0 ---
-        // Each step: solve M_delta * correction = r0, then dy += correction.
-        // M_delta is used ONLY as the preconditioner for the correction solve.
-        // Convergence measured on ||rhs - M0 * dy||.
-        // Delta is NOT increased because M0 refinement is progressing; that is expected.
-        for (int iter = 0; iter < 10; ++iter) {
-            // Backup current dy before applying correction
-            CHECK_CUDA(cudaMemcpy(d_dy_backup, d_dy_perm, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
+        for (iter = 0; iter < max_refinement_iters; ++iter) {
+            // Solve Mdelta * correction = r_perm
+            CHECK_CUDA(cudaMemset(d_correction, 0, m_ * sizeof(Float)));
+            CHECK_CUDA(cudaMemset(d_z_, 0, m_ * sizeof(Float)));
             
-            // Solve M_delta * correction = r0  (preconditioned defect correction)
-            if (iter == 0) {
-                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
-            }
             CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_r, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-            
-            if (iter == 0) {
-                CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_correction, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
-            }
             CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_correction, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
             
             correction_norm = compute_norm_kkt(m_, d_correction);
             
-            // dy += correction
+            // dy = dy + correction
             add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
             CHECK_CUDA(cudaDeviceSynchronize());
             
-            // Recompute PHYSICAL residual: r0 = rhs - M0 * dy
+            // Compute r0 = rhs - M0 * dy
             compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
             CHECK_CUDA(cudaDeviceSynchronize());
-            
             r0_norm_after = compute_norm_kkt(m_, d_r_perm);
             
-            if (r0_norm_after <= stop_tol) {
+            std::cout << "    [KKT]   refinement iter " << iter << " before: " << r0_norm_before 
+                      << " correction_norm: " << correction_norm 
+                      << " after: " << r0_norm_after << std::endl;
+
+            if (r0_norm_after <= required_abs_tol) {
                 refinement_converged = true;
+                exit_reason = "CONVERGED_PHYSICAL";
                 break;
             }
             
             if (r0_norm_after >= r0_norm_before) {
-                // Physical residual stagnated or grew; reject this correction
-                CHECK_CUDA(cudaMemcpy(d_dy_perm, d_dy_backup, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
-                // Recompute r0 on the rejected-correction dy for correct r_perm state
-                compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
-                CHECK_CUDA(cudaDeviceSynchronize());
-                r0_norm_after = r0_norm_before; // restore for diagnostics
-
-                // IMPORTANT: Distinguish FP64-floor stagnation (Case D: success) from
-                // genuine factorization failure (Case B: failure requiring larger delta).
-                // If the relative residual is already within the physical contract,
-                // stagnation is the FP64 floor, NOT a factorization problem.
-                // Increasing delta would only introduce MORE regularization bias, not less.
-                if (r0_norm_before <= stop_tol) {
-                    refinement_converged = true;
-                }
+                // Stagnation
+                r0_norm_after = r0_norm_before;
+                exit_reason = "STAGNATED";
                 break;
             }
             
             r0_norm_before = r0_norm_after;
         }
         
+        std::cout << "    [KKT] REFINEMENT_EXIT=" << exit_reason << std::endl;
+        std::cout << "    [KKT] Refinement iterations: " << (iter == max_refinement_iters ? iter : iter + 1) << std::endl;
+        
         if (refinement_converged) {
             success = true;
             break;
         }
-
-        // Physical refinement genuinely failed outside the relative contract (Case B).
-        // Increasing delta only helps if the factorization is poorly conditioned.
-        // Log with accurate names: physical_M0_residual, not "regularized".
-        const Float rel_residual = r0_norm_after / std::max(Float(1.0), rhs_norm);
-        std::cout << "    [KKT] Physical refinement stagnated outside contract on retry " << retry << std::endl
-                  << "      delta: " << delta << std::endl
-                  << "      rhs_norm: " << rhs_norm << std::endl
-                  << "      stop_tol (1e-10 * rhs_norm): " << stop_tol << std::endl
-                  << "      initial_dy_norm: " << initial_dy_norm << std::endl
-                  << "      initial_physical_M0_residual: " << initial_M0_residual << std::endl
-                  << "      correction_norm: " << correction_norm << std::endl
-                  << "      final_physical_M0_residual: " << r0_norm_after << std::endl
-                  << "      relative_M0_residual: " << rel_residual << std::endl;
     }
     
     if (!success) {

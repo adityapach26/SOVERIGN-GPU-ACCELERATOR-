@@ -763,8 +763,9 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float true_rhs_norm_p = kernels::compute_norm(m_, d_r_kkt_);
         std::cout << "[PREDICTOR] Pre-solve RHS norm: " << true_rhs_norm_p << std::endl;
 
+        Float required_abs_tol = 1e-9 * std::max(Float(1.0), norm_rp);
         // Solve for dy_aff (result in d_r_kkt_ in-place)
-        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) {
+        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_, required_abs_tol)) {
             result.status = simplex::SimplexStatus::IterationLimit; // Numerical failure
             result.iterations = iter;
             break;
@@ -826,7 +827,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         Float true_rhs_norm_c = kernels::compute_norm(m_, d_r_kkt_);
         std::cout << "[CORRECTOR] Pre-solve RHS norm: " << true_rhs_norm_c << std::endl;
 
-        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) {
+        if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_, required_abs_tol)) {
             result.status = simplex::SimplexStatus::IterationLimit; // Numerical failure
             result.iterations = iter;
             break;
@@ -895,7 +896,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
                 kernels::compute_r_xs(n_, d_x_, d_s_, nullptr, nullptr, sigma_c * mu, d_r_xs_);
                 kernels::compute_v(n_, d_Theta_, d_rd_, d_r_xs_, d_s_, d_v_);
                 compute_rkkt();
-                if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_)) break;
+                if (!kkt_->gpu_cholesky_solve_device(d_r_kkt_, required_abs_tol)) break;
                 compute_ds(d_ds_);
                 kernels::compute_dx(n_, d_Theta_, d_ds_, d_r_xs_, d_s_, d_dx_);
                 if (!verify_newton_direction(d_dx_, d_r_kkt_, d_ds_, d_r_xs_, norm_rp, norm_rd)) break;

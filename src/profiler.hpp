@@ -55,35 +55,97 @@ inline void print_report(const std::string& instance, int iterations, const std:
     std::lock_guard<std::mutex> lock(get_mutex());
     auto& recs = get_records();
     
-    std::cerr << "\n============================================================\n";
-    std::cerr << "SANKHYA PROFILING REPORT\n";
-    std::cerr << "============================================================\n\n";
-    std::cerr << "Instance: " << instance << "\n\n";
     
-    auto print_line = [&](const std::string& label, const std::string& key) {
-        double ms = 0.0;
-        if (recs.count(key)) ms = recs[key].total_ms;
-        std::cerr << std::left << std::setw(24) << label << ": " 
-                  << std::right << std::setw(10) << std::fixed << std::setprecision(3) << ms << " ms\n";
-    };
+    std::cerr << "
+============================================================
+";
+    std::cerr << "SOLVER SETUP DEEP PROFILE
+";
+    std::cerr << "=========================
 
-    print_line("Parsing", "Parsing");
-    print_line("Model construction", "Model construction");
-    print_line("Presolve", "Presolve");
-    print_line("GPU initialization", "GPU initialization");
-    print_line("GPU allocation", "GPU allocation");
-    print_line("H->D transfer", "H->D transfer");
-    print_line("Solver setup", "Solver setup");
-    print_line("Simplex", "Simplex");
-    print_line("  Pivot selection", "Pivot selection");
-    print_line("  Basis update", "Basis update");
-    print_line("  GPU kernels", "GPU kernels");
-    print_line("  Synchronization", "Synchronization");
-    print_line("Fallback", "Fallback");
-    print_line("D->H transfer", "D->H transfer");
-    print_line("Certificate", "Certificate");
-    print_line("KKT verification", "KKT verification");
-    print_line("Cleanup", "Cleanup");
+";
+    std::cerr << "Instance: " << instance << "
+
+";
+
+    print_line("Solver setup total", "Solver setup");
+    std::cerr << "
+";
+    print_line("CPU model preparation", "CPU model preparation");
+    print_line("Matrix conversion", "Matrix conversion");
+    print_line("CSR construction", "CSR construction");
+    print_line("CSC construction", "CSC construction");
+    print_line("Basis initialization", "Basis initialization");
+    print_line("Basis factorization setup", "Basis factorization setup");
+    print_line("CUDA library initialization", "CUDA library initialization");
+    print_line("CUDA stream setup", "CUDA stream setup");
+    print_line("GPU data structure setup", "GPU data structure setup");
+    print_line("GPU buffer preparation", "GPU buffer preparation");
+    print_line("Device initialization", "Device initialization");
+    print_line("Setup synchronization", "Setup synchronization");
+    print_line("Other setup", "Other setup");
+    std::cerr << "
+";
+    
+    std::cerr << "
+============================================================
+";
+    std::cerr << "GPU KERNEL PROFILE
+";
+    std::cerr << "==================
+
+";
+    std::cerr << "Instance: " << instance << "
+
+";
+    std::cerr << std::left << std::setw(30) << "Kernel" << std::right << std::setw(10) << "Calls" << std::setw(15) << "Total ms" << std::setw(15) << "Avg ms
+";
+    std::cerr << "----------------------------------------------------------------------
+";
+    
+    double total_gpu = 0.0;
+    for (const auto& p : recs) {
+        if (p.first.find("kernel_") == 0) {
+            double avg = p.second.total_ms / p.second.count;
+            std::cerr << std::left << std::setw(30) << p.first << std::right << std::setw(10) << p.second.count 
+                      << std::setw(15) << std::fixed << std::setprecision(3) << p.second.total_ms 
+                      << std::setw(15) << std::fixed << std::setprecision(3) << avg << "
+";
+            total_gpu += p.second.total_ms;
+        }
+    }
+    std::cerr << "
+Total GPU kernel time: " << std::fixed << std::setprecision(3) << total_gpu << " ms
+";
+
+    std::cerr << "
+============================================================
+";
+    std::cerr << "KKT VERIFICATION DEEP PROFILE
+";
+    std::cerr << "=============================
+
+";
+    print_line("KKT verification total", "KKT verification");
+    std::cerr << "
+";
+    print_line("Primal check", "KKT primal check");
+    print_line("Dual check", "KKT dual check");
+    print_line("Comp slackness check", "KKT comp slackness check");
+    print_line("Vector/matrix ops", "KKT vector/matrix operations");
+    print_line("Sync and reduction", "KKT synchronization and reduction");
+    print_line("Residual calculation", "KKT residual calculation");
+
+    std::cerr << "
+============================================================
+";
+    std::cerr << "CUDA SYNCHRONIZATION PROFILE
+";
+    std::cerr << "============================
+
+";
+    print_line("Synchronization total", "Synchronization");
+
     
 
     

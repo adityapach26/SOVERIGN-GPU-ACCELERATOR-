@@ -47,8 +47,43 @@
 
 
 
+
+#include <vector>
 namespace sankhya {
 namespace ipm {
+
+struct AsyncEvent {
+    std::string name;
+    cudaEvent_t start;
+    cudaEvent_t stop;
+};
+static std::vector<AsyncEvent> g_async_events;
+
+inline void record_gpu_start(const std::string& name) {
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+    g_async_events.push_back({name, start, stop});
+}
+
+inline void record_gpu_stop() {
+    if (!g_async_events.empty()) {
+        cudaEventRecord(g_async_events.back().stop);
+    }
+}
+
+inline void flush_gpu_events() {
+    for (auto& ev : g_async_events) {
+        cudaEventSynchronize(ev.stop);
+        float ms = 0.0f;
+        cudaEventElapsedTime(&ms, ev.start, ev.stop);
+        sankhya::profile::add_time(ev.name, ms);
+        cudaEventDestroy(ev.start);
+        cudaEventDestroy(ev.stop);
+    }
+    g_async_events.clear();
+}
 
 // ============================================================
 // CUDA kernels (internal to this TU)
@@ -147,7 +182,9 @@ struct step_length_functor {
 // Launch init kernel
 inline void initialize_variables(Index m, Index n, Float* d_x, Float* d_y, Float* d_s) {
     int blocks = (std::max(m, n) + 255) / 256;
+    record_gpu_start("kernel_init_vars");
     init_vars_kernel<<<blocks, 256>>>(m, n, d_x, d_y, d_s);
+    record_gpu_stop();
 }
 
 // 2-norm via Thrust
@@ -178,7 +215,9 @@ inline Float compute_objective(Index n, const Float* d_c, const Float* d_x) {
 // Theta[i] = x[i] / s[i]
 inline void compute_theta(Index n, const Float* d_x, const Float* d_s, Float* d_Theta) {
     int blocks = (n + 255) / 256;
+    record_gpu_start("kernel_compute_theta");
     compute_theta_kernel<<<blocks, 256>>>(n, d_x, d_s, d_Theta);
+    record_gpu_stop();
 }
 
 // r_xs[i] = -x[i]*s[i] + sigma_mu - dx_aff[i]*ds_aff[i]
@@ -186,21 +225,27 @@ inline void compute_r_xs(Index n, const Float* d_x, const Float* d_s,
                          const Float* d_dx_aff, const Float* d_ds_aff,
                          Float sigma_mu, Float* d_r_xs) {
     int blocks = (n + 255) / 256;
+    record_gpu_start("kernel_compute_r_xs");
     compute_r_xs_kernel<<<blocks, 256>>>(n, d_x, d_s, d_dx_aff, d_ds_aff, sigma_mu, d_r_xs);
+    record_gpu_stop();
 }
 
 // v[i] = -Theta[i]*rd[i] - r_xs[i]/s[i]
 inline void compute_v(Index n, const Float* d_Theta, const Float* d_rd,
                       const Float* d_r_xs, const Float* d_s, Float* d_v) {
     int blocks = (n + 255) / 256;
+    record_gpu_start("kernel_compute_v");
     compute_v_kernel<<<blocks, 256>>>(n, d_Theta, d_rd, d_r_xs, d_s, d_v);
+    record_gpu_stop();
 }
 
 // dx[i] = -Theta[i]*ds[i] + r_xs[i]/s[i]
 inline void compute_dx(Index n, const Float* d_Theta, const Float* d_ds,
                        const Float* d_r_xs, const Float* d_s, Float* d_dx) {
     int blocks = (n + 255) / 256;
+    record_gpu_start("kernel_compute_dx");
     compute_dx_kernel<<<blocks, 256>>>(n, d_Theta, d_ds, d_r_xs, d_s, d_dx);
+    record_gpu_stop();
 }
 
 // Fraction-to-boundary step length: min over i where d[i] < 0 of -v[i]/d[i]
@@ -216,7 +261,9 @@ inline Float compute_step_length(Index n, const Float* d_v, const Float* d_dv) {
 // x[i] += alpha * dx[i]
 inline void update_variables(Index n, Float alpha, const Float* d_dx, Float* d_x) {
     int blocks = (n + 255) / 256;
+    record_gpu_start("kernel_update_vars");
     update_vars_kernel<<<blocks, 256>>>(n, alpha, d_dx, d_x);
+    record_gpu_stop();
 }
 
 } // namespace kernels
@@ -232,7 +279,9 @@ public:
         n_ = model.A.cols;
 
         // Convert CSC model matrix to CSR for AMD/symbolic/KKT APIs
+        sankhya::profile::start_cpu("Matrix conversion");
         A_csr_ = core::to_csr(model.A);
+        sankhya::profile::stop_cpu("Matrix conversion");
         
         b_scaled_ = model.rhs;
         c_scaled_ = model.obj;
@@ -240,6 +289,7 @@ public:
         R_.assign(m_, 1.0);
         C_.assign(n_, 1.0);
 
+        sankhya::profile::start_cpu("CPU model preparation");
         int num_ruiz_iters = 10;
         for (int iter = 0; iter < num_ruiz_iters; ++iter) {
             std::vector<Float> r_max(m_, 0.0);
@@ -272,6 +322,9 @@ public:
             }
         }
 
+        sankhya::profile::stop_cpu("CPU model preparation");
+
+        sankhya::profile::start_cpu("CSR construction");
         std::vector<Index> P = compute_amd_ordering(A_csr_);
         compute_symbolic_factorization(A_csr_, P, sym_);
         sankhya::profile::stop_cpu("Presolve");
@@ -312,13 +365,20 @@ public:
         M_pattern.values.resize(M_pattern.col_indices.size(), 0.0);
 
         // GPUKKTCholeskySolver expects CSRMatrix for A
-        kkt_ = new gpu::GPUKKTCholeskySolver(arena_, A_csr_, sym_, M_pattern);
+        sankhya::profile::stop_cpu("CSR construction");
 
+        sankhya::profile::start_cpu("Basis factorization setup");
+        kkt_ = new gpu::GPUKKTCholeskySolver(arena_, A_csr_, sym_, M_pattern);
+        sankhya::profile::stop_cpu("Basis factorization setup");
+
+        sankhya::profile::start_cpu("CUDA library initialization");
         CHECK_CUSPARSE_IPM(cusparseCreate(&handle_));
+        sankhya::profile::stop_cpu("CUDA library initialization");
         sankhya::profile::stop_cpu("GPU initialization");
 
         sankhya::profile::start_cpu("GPU allocation");
         // Allocate persistent device vectors for IPM state
+        sankhya::profile::start_cpu("GPU buffer preparation");
         d_x_  = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
         d_y_  = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
         d_s_  = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
@@ -347,6 +407,9 @@ public:
         sankhya::profile::stop_cpu("GPU allocation");
         
         sankhya::profile::start_cpu("H->D transfer");
+        sankhya::profile::stop_cpu("GPU buffer preparation");
+
+        sankhya::profile::start_cpu("H->D transfer");
         CHECK_CUDA_IPM(cudaMemcpy(d_b_, b_scaled_.data(), m_ * sizeof(Float), cudaMemcpyHostToDevice));
         CHECK_CUDA_IPM(cudaMemcpy(d_c_, c_scaled_.data(), n_ * sizeof(Float), cudaMemcpyHostToDevice));
 
@@ -354,8 +417,10 @@ public:
         CHECK_CUDA_IPM(cudaMemcpy(d_A_col_indices_,  A_csr_.col_indices.data(), A_csr_.col_indices.size() * sizeof(Index),    cudaMemcpyHostToDevice));
         CHECK_CUDA_IPM(cudaMemcpy(d_A_vals_,          A_csr_.values.data(),     A_csr_.values.size()     * sizeof(Float),    cudaMemcpyHostToDevice));
         sankhya::profile::stop_cpu("H->D transfer");
+        sankhya::profile::stop_cpu("H->D transfer");
 
         sankhya::profile::start_cpu("GPU initialization");
+        sankhya::profile::start_cpu("GPU data structure setup");
         CHECK_CUSPARSE_IPM(cusparseCreateCsr(&descr_A_, m_, n_,
             static_cast<int64_t>(A_csr_.values.size()),
             d_A_row_ptrs_, d_A_col_indices_, d_A_vals_,
@@ -372,6 +437,7 @@ public:
         CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_v_,    n_, d_v_,     CUDA_R_64F));
         CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_rkkt_, m_, d_r_kkt_, CUDA_R_64F));
         CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_dy_,   m_, d_r_kkt_, CUDA_R_64F)); // dy reuses d_r_kkt_ in-place
+        sankhya::profile::stop_cpu("GPU data structure setup");
         sankhya::profile::stop_cpu("GPU initialization");
     }
 
@@ -400,6 +466,7 @@ private:
     // rp = Ax - b,   rd = A^T y + s - c
     bool verify_newton_direction(const Float* d_dx, const Float* d_dy, const Float* d_ds, const Float* d_r_xs, Float norm_rp, Float norm_rd) {
         sankhya::profile::start_cpu("KKT verification");
+        sankhya::profile::start_cpu("KKT vector/matrix operations");
         Float* d_r1 = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
         Float* d_r2 = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
         Float* d_r3 = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
@@ -414,8 +481,10 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &a_spmv, descr_A_, v_dx, &b_spmv, v_r1, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf1));
         void* dbuf = arena_.allocate(buf1);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &a_spmv, descr_A_, v_dx, &b_spmv, v_r1, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf));
+        record_gpu_stop();
         arena_.free(dbuf);
 
         CHECK_CUDA_IPM(cudaMemcpy(d_r2, d_rd_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
@@ -429,12 +498,19 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &a_spmv, descr_A_, v_dy, &b_spmv, v_r2, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf2));
         dbuf = arena_.allocate(buf2);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &a_spmv, descr_A_, v_dy, &b_spmv, v_r2, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf));
+        record_gpu_stop();
         arena_.free(dbuf);
 
-        kernels::compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
+        record_gpu_start("kernel_compute_e3");
+    compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
+    record_gpu_stop();
         
+        sankhya::profile::stop_cpu("KKT vector/matrix operations");
+
+        sankhya::profile::start_cpu("KKT synchronization and reduction");
         Float norm_r1 = kernels::compute_norm(m_, d_r1);
         Float norm_r2 = kernels::compute_norm(n_, d_r2);
         Float norm_r3 = kernels::compute_norm(n_, d_r3);
@@ -444,6 +520,9 @@ private:
         Float norm_ds = kernels::compute_norm(n_, d_ds);
 
         // Measure FP accumulation error in late iterations
+        sankhya::profile::stop_cpu("KKT synchronization and reduction");
+
+        sankhya::profile::start_cpu("KKT residual calculation");
         Float e1 = norm_r1 / std::max(Float(1.0), norm_rp);
         Float e2 = norm_r2 / std::max(Float(1.0), norm_rd);
         Float e3 = norm_r3 / std::max(Float(1.0), norm_rxs);
@@ -462,6 +541,7 @@ private:
                   << "  e2: " << e2
                   << "  e3: " << e3
                   << std::endl;
+        sankhya::profile::stop_cpu("KKT residual calculation");
         if (e1 > 1e-8 || e2 > 1e-8 || e3 > 1e-8) {
             sankhya::profile::add_time("KKT verification failures", 1.0);
             std::cout << "    [KKT Verify] FAILED!" << std::endl;
@@ -492,8 +572,10 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, descr_A_, vec_x_, &beta, vec_rp_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
         void* dBuffer = arena_.allocate(bufferSize);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, descr_A_, vec_x_, &beta, vec_rp_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dBuffer));
+        record_gpu_stop();
         arena_.free(dBuffer);
 
         // rd = s - c
@@ -507,8 +589,10 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &alpha, descr_A_, vec_y_, &beta, vec_rd_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
         dBuffer = arena_.allocate(bufferSize);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &alpha, descr_A_, vec_y_, &beta, vec_rd_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dBuffer));
+        record_gpu_stop();
         arena_.free(dBuffer);
     }
 
@@ -524,8 +608,10 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, descr_A_, vec_v_, &beta, vec_rkkt_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
         void* dBuffer = arena_.allocate(bufferSize);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, descr_A_, vec_v_, &beta, vec_rkkt_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dBuffer));
+        record_gpu_stop();
         arena_.free(dBuffer);
     }
 
@@ -543,8 +629,10 @@ private:
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &alpha, descr_A_, vec_dy_, &beta, vec_ds, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize));
         void* dBuffer = arena_.allocate(bufferSize);
+        record_gpu_start("kernel_cusparseSpMV");
         CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
             &alpha, descr_A_, vec_dy_, &beta, vec_ds, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dBuffer));
+        record_gpu_stop();
         arena_.free(dBuffer);
         cusparseDestroyDnVec(vec_ds);
     }
@@ -582,7 +670,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
 
     // Initialize: x = 1, s = 1, y = 0
     kernels::initialize_variables(m_, n_, d_x_, d_y_, d_s_);
-    sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+    sankhya::profile::start_cpu("Sync: Init"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Init"); flush_gpu_events();
 
     Index max_iter = 200;
     // Opt-in, bounded diagnostics for the small-LP globalization validation.
@@ -591,7 +679,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     int trace_trials_left = 96;
     for (Index iter = 0; iter < max_iter; ++iter) {
         compute_residuals();
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Residuals"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Residuals"); flush_gpu_events();
 
         Float norm_rp = kernels::compute_norm(m_, d_rp_);
         Float norm_rd = kernels::compute_norm(n_, d_rd_);
@@ -654,7 +742,9 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         kernels::compute_theta(n_, d_x_, d_s_, d_Theta_);
         
         try {
-            kkt_->gpu_cholesky_factorize_device(d_Theta_);
+            record_gpu_start("kernel_cholesky_factorize");
+        kkt_->gpu_cholesky_factorize_device(d_Theta_);
+        record_gpu_stop();
         } catch (const std::exception& e) {
             if (model_.obj.size() == 138) {
                 std::cout << "  [ADLITTLE DIAGNOSTIC] Cholesky failed at iter " << iter << " with: " << e.what() << std::endl;
@@ -665,10 +755,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         // r_xs_aff = -x * s  (sigma_mu = 0, no affine terms yet)
         kernels::compute_r_xs(n_, d_x_, d_s_, nullptr, nullptr, 0.0, d_r_xs_);
         kernels::compute_v(n_, d_Theta_, d_rd_, d_r_xs_, d_s_, d_v_);
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Predictor Setup"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Predictor Setup"); flush_gpu_events();
 
         compute_rkkt();
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Predictor RHS"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Predictor RHS"); flush_gpu_events();
 
         Float true_rhs_norm_p = kernels::compute_norm(m_, d_r_kkt_);
         std::cout << "[PREDICTOR] Pre-solve RHS norm: " << true_rhs_norm_p << std::endl;
@@ -684,7 +774,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         compute_ds(d_ds_aff_);
         // dx_aff = -Theta * ds_aff + r_xs / s
         kernels::compute_dx(n_, d_Theta_, d_ds_aff_, d_r_xs_, d_s_, d_dx_aff_);
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Predictor Solve"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Predictor Solve"); flush_gpu_events();
 
         Float dy_norm_p = kernels::compute_norm(m_, d_r_kkt_);
         Float dx_norm_p  = kernels::compute_norm(n_, d_dx_aff_);
@@ -717,7 +807,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         CHECK_CUDA_IPM(cudaMemcpy(d_tmp_s, d_s_, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
         kernels::update_variables(n_, alpha_p_aff, d_dx_aff_, d_tmp_x);
         kernels::update_variables(n_, alpha_d_aff, d_ds_aff_, d_tmp_s);
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Affine Step"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Affine Step"); flush_gpu_events();
         Float mu_aff = kernels::compute_mu(n_, d_tmp_x, d_tmp_s);
         arena_.free(d_tmp_s);
         arena_.free(d_tmp_x);
@@ -728,10 +818,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
         // r_xs = -x*s + sigma*mu - dx_aff * ds_aff
         kernels::compute_r_xs(n_, d_x_, d_s_, d_dx_aff_, d_ds_aff_, sigma * mu, d_r_xs_);
         kernels::compute_v(n_, d_Theta_, d_rd_, d_r_xs_, d_s_, d_v_);
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Corrector Setup"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Corrector Setup"); flush_gpu_events();
 
         compute_rkkt();
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Corrector RHS"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Corrector RHS"); flush_gpu_events();
 
         Float true_rhs_norm_c = kernels::compute_norm(m_, d_r_kkt_);
         std::cout << "[CORRECTOR] Pre-solve RHS norm: " << true_rhs_norm_c << std::endl;
@@ -744,7 +834,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
 
         compute_ds(d_ds_);
         kernels::compute_dx(n_, d_Theta_, d_ds_, d_r_xs_, d_s_, d_dx_);
-        sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+        sankhya::profile::start_cpu("Sync: Corrector Solve"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Corrector Solve"); flush_gpu_events();
 
         Float dy_norm_c = kernels::compute_norm(m_, d_r_kkt_);
         Float dx_norm_c  = kernels::compute_norm(n_, d_dx_);
@@ -835,8 +925,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
                 CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
                     &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf1));
                 void* dbuf1 = arena_.allocate(buf1);
-                CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                record_gpu_start("kernel_cusparseSpMV");
+        CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE,
                     &a_spmv, descr_A_, vec_bt_x, &b_spmv, vec_bt_rp, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf1));
+        record_gpu_stop();
                 arena_.free(dbuf1);
 
                 CHECK_CUDA_IPM(cudaMemcpy(d_bt_rd, d_bt_s, n_ * sizeof(Float), cudaMemcpyDeviceToDevice));
@@ -848,8 +940,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
                 CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE,
                     &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &buf2));
                 void* dbuf2 = arena_.allocate(buf2);
-                CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
+                record_gpu_start("kernel_cusparseSpMV");
+        CHECK_CUSPARSE_IPM(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE,
                     &a_spmv, descr_A_, vec_bt_y, &b_spmv, vec_bt_rd, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, dbuf2));
+        record_gpu_stop();
                 arena_.free(dbuf2);
 
                 Float rp_new_norm = kernels::compute_norm(m_, d_bt_rp);
@@ -939,7 +1033,7 @@ MehrotraResult MehrotraSolver::Impl::solve() {
 
     // End of loop
     compute_residuals();
-    sankhya::profile::start_cpu("Synchronization"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Synchronization");
+    sankhya::profile::start_cpu("Sync: Final Residuals"); cudaDeviceSynchronize(); sankhya::profile::stop_cpu("Sync: Final Residuals"); flush_gpu_events();
     if (result.status == simplex::SimplexStatus::Optimal) {
         result.status          = simplex::SimplexStatus::IterationLimit;
         result.iterations      = max_iter;

@@ -132,22 +132,29 @@ def run_benchmarks():
         results_scip.append(res_c)
 
     with open("benchmark_results.csv", "w") as f:
-        f.write("Solver,Instance,Status,Time(ms),Iterations,Objective,Variables,Constraints,NNZ,PrimalRes\n")
+        f.write("Solver,Instance,Status,Time(ms),Iterations,Objective,Variables,Constraints,NNZ,PrimalRes,Version\n")
         for res_list in [results_sankhya, results_highs, results_scip]:
             for r in res_list:
-                f.write(f"{r.get('solver', '')},{r.get('instance', '')},{r.get('status', '')},{r.get('solve_time_ms', '')},{r.get('iterations', '')},{r.get('objective', '')},{r.get('variables', '')},{r.get('constraints', '')},{r.get('nnz', '')},{r.get('primal_residual', '')}\n")
+                f.write(f"{r.get('solver', '')},{r.get('instance', '')},{r.get('status', '')},{r.get('solve_time_ms', '')},{r.get('iterations', '')},{r.get('objective', '')},{r.get('variables', '')},{r.get('constraints', '')},{r.get('nnz', '')},{r.get('primal_residual', '')},{r.get('version', '')}\n")
 
     with open("benchmark_summary.csv", "w") as f:
         f.write("Metric,SANKHYA,HiGHS,SCIP\n")
         f.write(f"Instances Solved,{len([r for r in results_sankhya if r.get('status')=='Optimal'])},{len([r for r in results_highs if r.get('status')=='Optimal'])},{len([r for r in results_scip if r.get('status')=='Optimal'])}\n")
 
-    print("\n| Solver | Instance | Status | Time (ms) | Iterations | Objective | Variables | Constraints |")
-    print("| ------ | -------- | ------ | --------- | ---------- | --------- | --------- | ----------- |")
+    print("\n| Solver | Instance | Status | Time (ms) | Iterations | Objective | Variables | Constraints | NNZ |")
+    print("| ------ | -------- | ------ | --------- | ---------- | --------- | --------- | ----------- | --- |")
     for res_list in [results_sankhya, results_highs, results_scip]:
         for r in res_list:
             t = r.get('solve_time_ms', 0.0)
             if t == '' or t is None: t = 0.0
-            print(f"| {r.get('solver', '')} | {r.get('instance', '')} | {r.get('status', '')} | {float(t):.2f} | {r.get('iterations', '')} | {r.get('objective', '')} | {r.get('variables', '')} | {r.get('constraints', '')} |")
+            print(f"| {r.get('solver', '')} | {r.get('instance', '')} | {r.get('status', '')} | {float(t):.3f} | {r.get('iterations', '')} | {r.get('objective', '')} | {r.get('variables', '')} | {r.get('constraints', '')} | {r.get('nnz', '')} |")
+
+    # Print version metadata if available
+    highs_versions = set(r.get('version', '') for r in results_highs if r.get('version'))
+    if highs_versions:
+        print("\nMetadata:")
+        for v in highs_versions:
+            print(f"- {v}")
 
     print("\n| Metric              | SANKHYA | HiGHS | SCIP |")
     print("| ------------------- | ------- | ----- | ---- |")

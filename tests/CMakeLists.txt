@@ -93,6 +93,12 @@ if(SANKHYA_ENABLE_CUDA)
 endif()
 
 # Pure C API Test
+add_executable(sankhya_benchmark_cli benchmark/sankhya_benchmark_cli.cpp)
+if(SANKHYA_ENABLE_CUDA)
+  set_target_properties(sankhya_benchmark_cli PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_ARCHITECTURES 75)
+endif()
+target_link_libraries(sankhya_benchmark_cli PRIVATE sankhya_core)
+
 add_executable(sankhya_c_api_test unit/test_c_api.c)
 target_link_libraries(sankhya_c_api_test PRIVATE sankhya_core)
 add_test(NAME sankhya_c_api_test COMMAND sankhya_c_api_test)

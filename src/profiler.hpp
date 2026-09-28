@@ -55,22 +55,25 @@ inline void print_report(const std::string& instance, int iterations, const std:
     std::lock_guard<std::mutex> lock(get_mutex());
     auto& recs = get_records();
     
+    std::cerr << "\n============================================================\n";
+    std::cerr << "SANKHYA PROFILING REPORT\n";
+    std::cerr << "============================================================\n\n";
+    std::cerr << "Instance: " << instance << "\n\n";
     
-    std::cerr << "
-============================================================
-";
-    std::cerr << "SOLVER SETUP DEEP PROFILE
-";
-    std::cerr << "=========================
+    auto print_line = [&](const std::string& label, const std::string& key) {
+        double ms = 0.0;
+        if (recs.count(key)) ms = recs[key].total_ms;
+        std::cerr << std::left << std::setw(24) << label << ": " 
+                  << std::right << std::setw(10) << std::fixed << std::setprecision(3) << ms << " ms\n";
+    };
 
-";
-    std::cerr << "Instance: " << instance << "
-
-";
+    std::cerr << "\n============================================================\n";
+    std::cerr << "SOLVER SETUP DEEP PROFILE\n";
+    std::cerr << "=========================\n\n";
+    std::cerr << "Instance: " << instance << "\n\n";
 
     print_line("Solver setup total", "Solver setup");
-    std::cerr << "
-";
+    std::cerr << "\n";
     print_line("CPU model preparation", "CPU model preparation");
     print_line("Matrix conversion", "Matrix conversion");
     print_line("CSR construction", "CSR construction");
@@ -84,51 +87,32 @@ inline void print_report(const std::string& instance, int iterations, const std:
     print_line("Device initialization", "Device initialization");
     print_line("Setup synchronization", "Setup synchronization");
     print_line("Other setup", "Other setup");
-    std::cerr << "
-";
-    
-    std::cerr << "
-============================================================
-";
-    std::cerr << "GPU KERNEL PROFILE
-";
-    std::cerr << "==================
+    std::cerr << "\n";
 
-";
-    std::cerr << "Instance: " << instance << "
+    std::cerr << "\n============================================================\n";
+    std::cerr << "GPU KERNEL PROFILE\n";
+    std::cerr << "==================\n\n";
+    std::cerr << "Instance: " << instance << "\n\n";
+    std::cerr << std::left << std::setw(30) << "Kernel" << std::right << std::setw(10) << "Calls" << std::setw(15) << "Total ms" << std::setw(15) << "Avg ms\n";
+    std::cerr << "----------------------------------------------------------------------\n";
 
-";
-    std::cerr << std::left << std::setw(30) << "Kernel" << std::right << std::setw(10) << "Calls" << std::setw(15) << "Total ms" << std::setw(15) << "Avg ms
-";
-    std::cerr << "----------------------------------------------------------------------
-";
-    
     double total_gpu = 0.0;
     for (const auto& p : recs) {
         if (p.first.find("kernel_") == 0) {
             double avg = p.second.total_ms / p.second.count;
             std::cerr << std::left << std::setw(30) << p.first << std::right << std::setw(10) << p.second.count 
                       << std::setw(15) << std::fixed << std::setprecision(3) << p.second.total_ms 
-                      << std::setw(15) << std::fixed << std::setprecision(3) << avg << "
-";
+                      << std::setw(15) << std::fixed << std::setprecision(3) << avg << "\n";
             total_gpu += p.second.total_ms;
         }
     }
-    std::cerr << "
-Total GPU kernel time: " << std::fixed << std::setprecision(3) << total_gpu << " ms
-";
+    std::cerr << "\nTotal GPU kernel time: " << std::fixed << std::setprecision(3) << total_gpu << " ms\n";
 
-    std::cerr << "
-============================================================
-";
-    std::cerr << "KKT VERIFICATION DEEP PROFILE
-";
-    std::cerr << "=============================
-
-";
+    std::cerr << "\n============================================================\n";
+    std::cerr << "KKT VERIFICATION DEEP PROFILE\n";
+    std::cerr << "=============================\n\n";
     print_line("KKT verification total", "KKT verification");
-    std::cerr << "
-";
+    std::cerr << "\n";
     print_line("Primal check", "KKT primal check");
     print_line("Dual check", "KKT dual check");
     print_line("Comp slackness check", "KKT comp slackness check");
@@ -136,17 +120,18 @@ Total GPU kernel time: " << std::fixed << std::setprecision(3) << total_gpu << "
     print_line("Sync and reduction", "KKT synchronization and reduction");
     print_line("Residual calculation", "KKT residual calculation");
 
-    std::cerr << "
-============================================================
-";
-    std::cerr << "CUDA SYNCHRONIZATION PROFILE
-";
-    std::cerr << "============================
+    std::cerr << "\n============================================================\n";
+    std::cerr << "CUDA SYNCHRONIZATION PROFILE\n";
+    std::cerr << "============================\n\n";
 
-";
-    print_line("Synchronization total", "Synchronization");
-
-    
+    double total_sync = 0.0;
+    for (const auto& p : recs) {
+        if (p.first.find("Sync: ") == 0) {
+            print_line(p.first, p.first);
+            total_sync += p.second.total_ms;
+        }
+    }
+    std::cerr << "\nTotal synchronization time: " << std::fixed << std::setprecision(3) << total_sync << " ms\n";
 
     
     if (recs.count("TOTAL")) {

@@ -49,9 +49,9 @@ def sankhya_solve(mps_path):
         try:
             # Extract JSON block robustly in case of stray stdout lines
             if result.stderr and "SANKHYA PROFILING REPORT" in result.stderr:
-            with open("profiling_report.txt", "a") as f: f.write(result.stderr)
-            print(result.stderr)
-        out_str = result.stdout
+                with open("profiling_report.txt", "a") as f: f.write(result.stderr)
+                print(result.stderr)
+            out_str = result.stdout
             json_start = out_str.find('{')
             json_end = out_str.rfind('}')
             if json_start != -1 and json_end != -1:

@@ -92,29 +92,27 @@ core::CSCMatrix build_csc(Index nrows, Index ncols,
                   return a.col < b.col || (a.col == b.col && a.row < b.row);
               });
 
-    core::CSCMatrix M;
-    M.rows = nrows;
-    M.cols = ncols;
-    M.col_ptrs.resize(static_cast<std::size_t>(ncols) + 1, 0);
+    std::vector<Index> col_ptrs(static_cast<std::size_t>(ncols) + 1, 0);
 
     for (const auto& e : entries) {
-        M.col_ptrs[static_cast<std::size_t>(e.col) + 1]++;
+        col_ptrs[static_cast<std::size_t>(e.col) + 1]++;
     }
     for (Index j = 1; j <= ncols; ++j) {
-        M.col_ptrs[static_cast<std::size_t>(j)] +=
-            M.col_ptrs[static_cast<std::size_t>(j) - 1];
+        col_ptrs[static_cast<std::size_t>(j)] +=
+            col_ptrs[static_cast<std::size_t>(j) - 1];
     }
-    M.row_indices.resize(entries.size());
-    M.values.resize(entries.size());
+    
+    std::vector<Index> row_indices(entries.size());
+    std::vector<Float> values(entries.size());
 
-    std::vector<Index> fill_ptr(M.col_ptrs.begin(), M.col_ptrs.end());
+    std::vector<Index> fill_ptr(col_ptrs.begin(), col_ptrs.end());
     for (const auto& e : entries) {
         const auto pos = static_cast<std::size_t>(
             fill_ptr[static_cast<std::size_t>(e.col)]++);
-        M.row_indices[pos] = e.row;
-        M.values[pos] = e.val;
+        row_indices[pos] = e.row;
+        values[pos] = e.val;
     }
-    return M;
+    return core::CSCMatrix(nrows, ncols, std::move(values), std::move(row_indices), std::move(col_ptrs));
 }
 
 } // anonymous namespace

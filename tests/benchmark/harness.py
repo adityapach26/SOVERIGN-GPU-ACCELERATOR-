@@ -7,27 +7,46 @@ import time
 from external_baselines.highs_wrapper import solve_mps as highs_solve
 from external_baselines.scip_wrapper import solve_mps as scip_solve
 
-BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'build'))
-CLI_PATH = os.path.join(BUILD_DIR, 'sankhya_benchmark_cli')
-if os.name == 'nt':
-    if os.path.exists(os.path.join(BUILD_DIR, 'Release', 'sankhya_benchmark_cli.exe')):
-        CLI_PATH = os.path.join(BUILD_DIR, 'Release', 'sankhya_benchmark_cli.exe')
-    elif os.path.exists(os.path.join(BUILD_DIR, 'Debug', 'sankhya_benchmark_cli.exe')):
-        CLI_PATH = os.path.join(BUILD_DIR, 'Debug', 'sankhya_benchmark_cli.exe')
-    else:
-        CLI_PATH = os.path.join(BUILD_DIR, 'sankhya_benchmark_cli.exe')
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+def find_cli():
+    # Search all common build directories
+    possible_dirs = [
+        os.path.join(REPO_ROOT, 'build'),
+        os.path.join(REPO_ROOT, 'build', 'tests'),
+        os.path.join(REPO_ROOT, 'build', 'tests', 'benchmark'),
+        os.path.join(REPO_ROOT, 'build', 'tests', 'Release'),
+        os.path.join(REPO_ROOT, 'build', 'tests', 'Debug'),
+        os.path.join(REPO_ROOT, 'build', 'Release'),
+        os.path.join(REPO_ROOT, 'build', 'Debug')
+    ]
+    
+    bin_names = ['sankhya_benchmark_cli', 'sankhya_benchmark_cli.exe']
+    
+    for d in possible_dirs:
+        for name in bin_names:
+            path = os.path.join(d, name)
+            if os.path.exists(path):
+                return path
+    return None
+
+CLI_PATH = find_cli()
 
 def sankhya_solve(mps_path):
-    if not os.path.exists(CLI_PATH):
+    if not CLI_PATH or not os.path.exists(CLI_PATH):
         return {'solver': 'SANKHYA', 'status': 'Executable Not Found'}
     try:
         result = subprocess.run([CLI_PATH, mps_path], capture_output=True, text=True, check=False)
         try:
-            return json.loads(result.stdout)
+            res = json.loads(result.stdout)
+            # Ensure required fields exist
+            res.setdefault('solve_time_ms', 0.0)
+            res.setdefault('iterations', 0)
+            return res
         except:
-            return {'solver': 'SANKHYA', 'status': 'Failed', 'error': result.stderr}
+            return {'solver': 'SANKHYA', 'status': 'Failed', 'error': result.stderr, 'solve_time_ms': 0.0, 'iterations': 0}
     except Exception as e:
-        return {'solver': 'SANKHYA', 'status': 'Failed', 'error': str(e)}
+        return {'solver': 'SANKHYA', 'status': 'Failed', 'error': str(e), 'solve_time_ms': 0.0, 'iterations': 0}
 
 def print_sih_metrics(results):
     print("\n" + "="*60)
@@ -42,8 +61,12 @@ def print_sih_metrics(results):
     for r in results:
         if r.get('status') == 'Optimal':
             sankhya_solved += 1
-            sankhya_times.append(r.get('solve_time_ms', 0))
-            sankhya_iters.append(r.get('iterations', 0))
+            t = r.get('solve_time_ms', 0)
+            if t == '': t = 0.0
+            sankhya_times.append(float(t))
+            it = r.get('iterations', 0)
+            if it == '': it = 0
+            sankhya_iters.append(int(it))
             
     if sankhya_solved > 0:
         sankhya_times.sort()
@@ -75,16 +98,18 @@ def print_sih_metrics(results):
     print("="*60 + "\n")
 
 def run_benchmarks():
-    mps_files = glob.glob(os.path.join(os.path.dirname(__file__), '..', '..', 'netlib', '*.mps'))
+    if not CLI_PATH:
+        print(f"Error: sankhya_benchmark_cli Executable Not Found in build directories.")
+        print(f"Searched under: {REPO_ROOT}/build")
+        return
+
+    mps_files = glob.glob(os.path.join(REPO_ROOT, 'benchmarks', 'netlib', '*.mps'))
     if not mps_files:
-        mps_files = glob.glob(os.path.join(os.path.dirname(__file__), 'netlib', '*.mps'))
-    
+        mps_files = glob.glob(os.path.join(REPO_ROOT, 'netlib', '*.mps'))
+        
     if not mps_files:
-        print("No MPS files found. Creating a dummy MPS for testing harness...")
-        dummy_mps = os.path.join(os.path.dirname(__file__), 'dummy.mps')
-        with open(dummy_mps, 'w') as f:
-            f.write("NAME          DUMMY\nROWS\n N  OBJ\n E  R1\nCOLUMNS\n    X1        OBJ       1.0\n    X1        R1        1.0\nRHS\n    RHS1      R1        5.0\nBOUNDS\n LO BND1      X1        0.0\nENDATA\n")
-        mps_files = [dummy_mps]
+        print(f"Error: No MPS files found under {REPO_ROOT}/benchmarks/netlib/")
+        return
 
     results_sankhya = []
     results_highs = []
@@ -121,7 +146,7 @@ def run_benchmarks():
     for res_list in [results_sankhya, results_highs, results_scip]:
         for r in res_list:
             t = r.get('solve_time_ms', 0.0)
-            if t == '': t = 0.0
+            if t == '' or t is None: t = 0.0
             print(f"| {r.get('solver', '')} | {r.get('instance', '')} | {r.get('status', '')} | {float(t):.2f} | {r.get('iterations', '')} | {r.get('objective', '')} | {r.get('variables', '')} | {r.get('constraints', '')} |")
 
     print("\n| Metric              | SANKHYA | HiGHS | SCIP |")

@@ -614,6 +614,12 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     cusparseSpMatDescr_t descr_M0, descr_Mdelta;
     CHECK_CUSPARSE(cusparseCreateCsr(&descr_M0, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateCsr(&descr_Mdelta, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+    
+    Index nnz_L = 0;
+    CHECK_CUDA(cudaMemcpy(&nnz_L, d_L_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
+    cusparseSpMatDescr_t descr_L_general;
+    CHECK_CUSPARSE(cusparseCreateCsr(&descr_L_general, m_, m_, nnz_L, d_L_row_ptrs_, d_L_col_indices_, d_L_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+    
     cusparseDnVecDescr_t vec_diag_spmv, vec_ones;
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_diag_spmv, m_, d_diag_spmv, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_ones, m_, d_ones, CUDA_R_64F));
@@ -657,14 +663,14 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta, vec_ones, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
             arena_.free(d_spmv);
             
-            CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+            CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_general, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
             d_spmv = arena_.allocate(spmv_buf);
-            CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+            CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_general, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
             arena_.free(d_spmv);
             
-            CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_z, &beta_zero, vec_r_eq, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+            CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_general, vec_z, &beta_zero, vec_r_eq, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
             d_spmv = arena_.allocate(spmv_buf);
-            CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_z, &beta_zero, vec_r_eq, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+            CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_general, vec_z, &beta_zero, vec_r_eq, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
             arena_.free(d_spmv);
             
             vector_sub_kernel<<<blocks, threads>>>(m_, d_diag_spmv, d_r_eq, d_diag_sub);
@@ -817,6 +823,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     
     cusparseDestroySpMat(descr_M0);
     cusparseDestroySpMat(descr_Mdelta);
+    cusparseDestroySpMat(descr_L_general);
     cusparseDestroyDnVec(vec_diag_spmv);
     cusparseDestroyDnVec(vec_ones);
     cusparseDestroyDnVec(vec_rhs);

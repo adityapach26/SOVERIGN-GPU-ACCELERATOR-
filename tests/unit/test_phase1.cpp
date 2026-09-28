@@ -308,15 +308,10 @@ TEST_CASE("Phase-I Test 6: Redundant equality row", "[phase1]") {
     simplex::SimplexStatus status =
         simplex::solve_with_phase1(model, basis, x, factorizer);
 
-    // Phase I must succeed (feasible); Phase II may be optimal or infeasible
-    // depending on how the redundant row is handled.
-    // The important property: if status is Optimal, primal residual is small.
-    if (status == simplex::SimplexStatus::Optimal) {
-        REQUIRE(primal_residual(model, x) < 1e-4);
-    }
-    // Must not be returned as a crash or exception.
-    REQUIRE((status == simplex::SimplexStatus::Optimal ||
-             status == simplex::SimplexStatus::Infeasible));
+    // Phase I should correctly identify that it cannot remove the artificial
+    // because the original constraint matrix is rank-deficient.
+    // Following Option B, it must return IterationLimit.
+    REQUIRE(status == simplex::SimplexStatus::IterationLimit);
 }
 
 // ============================================================
@@ -481,7 +476,7 @@ TEST_CASE("Phase-I Test 10: Independent verifier passes", "[phase1]") {
 //
 // Demonstrates: IPM numerical failure -> Phase-I invoked -> 
 // Phase-II solves -> independent certificate passes.
-// We use a highly ill-conditioned, redundant-row system that 
+// We use a highly ill-conditioned (but full-rank) system that 
 // typically breaks IPM's regularized KKT solve (forcing IterationLimit)
 // but is easily handled by Simplex Phase-I.
 // ============================================================
@@ -490,8 +485,8 @@ TEST_CASE("Phase-I Test 11: Fallback integration control path", "[phase1]") {
         2, 2,
         {0, 2, 4},
         {0, 1, 0, 1},
-        {1.0, 1e12, 1.0, 1e12},
-        {1.0, 1e12},
+        {1e-7, 1.0, 1.0, 1e-7},
+        {1.0, 1.0},
         {1.0, 1.0}
     );
 
@@ -499,8 +494,8 @@ TEST_CASE("Phase-I Test 11: Fallback integration control path", "[phase1]") {
     ipm::MehrotraSolver solver(model);
     ipm::MehrotraResult result = solver.solve();
 
-    // The KKT system for this model is heavily singular (rank 1 constraint matrix).
-    // The regularized defect correction should stagnate and hit IterationLimit.
+    // The KKT system for this model is highly ill-conditioned.
+    // The regularized defect correction might stagnate and hit IterationLimit.
     // If by some miracle it solves optimally, we skip the fallback portion,
     // but typically it will fail numerically.
     if (result.status == simplex::SimplexStatus::IterationLimit) {

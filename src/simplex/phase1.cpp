@@ -366,47 +366,16 @@ SimplexStatus solve_with_phase1(
         }
 
         if (pivot_col == -1) {
-            // No original column can pivot into this row.
-            // This means the row is genuinely redundant (all original entries
-            // in this row are zero after basis transformation).
-            // The artificial is at value 0 (feasibility passed), so this is
-            // a degenerate feasible basis.  We accept it; primal_simplex_phase2
-            // will handle it from here.
+            // No original column can pivot into this row because the row is
+            // a linear combination of other rows in the basis (rank deficient).
+            // The artificial is at value 0 (feasibility holds), but Phase II
+            // requires a full-rank constraint matrix.
             //
-            // However, we still need to replace the artificial in basic_indices
-            // with some original variable, even at the cost of a singular update.
-            // As a last resort, find any original column with a nonzero in the
-            // original A row (before FTRAN), which would imply a structurally
-            // nonzero entry:
-            for (Index j = 0; j < n; ++j) {
-                const auto jj = static_cast<std::size_t>(j);
-                if (basis_p1.col_status[jj] == BasisStatus::Basic) continue;
-                // Check if A has any nonzero in row i for column j
-                const Index col_start = model_p1.A.col_ptrs[jj];
-                const Index col_end   = model_p1.A.col_ptrs[jj + 1];
-                for (Index k = col_start; k < col_end; ++k) {
-                    const auto kk = static_cast<std::size_t>(k);
-                    if (model_p1.A.row_indices[kk] == i &&
-                        std::abs(model_p1.A.values[kk]) > 0.0) {
-                        pivot_col = j;
-                        break;
-                    }
-                }
-                if (pivot_col != -1) break;
-            }
-            if (pivot_col == -1) {
-                // Truly redundant row: no original variable appears in this row
-                // after basis transformation.  The artificial is at value 0,
-                // so the system IS FEASIBLE, but the constraint matrix is
-                // rank-deficient here and Phase II cannot be safely invoked.
-                //
-                // OPTION B (architecture spec): Report IterationLimit to signal
-                // "the recovery path does not support this rank-deficient model"
-                // rather than falsely claiming mathematical infeasibility.
-                // The caller should log this limitation and not attempt Phase II.
-                return SimplexStatus::IterationLimit;
-            }
-            // Use this column despite a possibly tiny pivot (degenerate case).
+            // OPTION B (architecture spec): Report IterationLimit to signal
+            // "the recovery path does not support this rank-deficient model"
+            // rather than falsely claiming mathematical infeasibility or
+            // constructing a singular basis that will crash the factorizer.
+            return SimplexStatus::IterationLimit;
         }
 
         // Perform the basis exchange: pivot_col enters row i.

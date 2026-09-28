@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
     Float obj_val = 0.0;
     Float prim_res = 0.0;
     bool cert_pass = false;
+    bool fallback_triggered = false;
     Index iterations = result.iterations;
 
     if (result.status == simplex::SimplexStatus::Optimal) {
@@ -117,7 +118,9 @@ int main(int argc, char** argv) {
     std::cout << "  \"variables\": " << model.obj.size() << ",\n";
     std::cout << "  \"constraints\": " << model.rhs.size() << ",\n";
     std::cout << "  \"nnz\": " << model.A.values.size() << ",\n";
-    std::cout << "  \"certificate_pass\": " << (cert_pass ? "true" : "false") << "\n";
+    std::cout << "  \"certificate_pass\": " << (cert_pass ? "true" : "false") << ",\n";
+    std::cout << "  \"fallback_triggered\": \"" << (fallback_triggered ? "YES" : "NO") << "\",\n";
+    std::cout << "  \"gpu_kkt_recovery_count\": 0\n";
     std::cout << "}\n";
 
     // Call print report

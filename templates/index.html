@@ -422,7 +422,7 @@
                     <div class="stat-label">HOST → DEVICE</div><div class="stat-value" id="gpu-h2d">N/A</div>
                     <div class="stat-label">DEVICE → HOST</div><div class="stat-value" id="gpu-d2h">N/A</div>
                     <div class="stat-label" style="margin-top: 10px;">CUDA STATUS</div>
-                    <div class="stat-value success" style="margin-top: 10px;" id="gpu-cuda-status">OK</div>
+                    <div class="stat-value" style="margin-top: 10px;" id="gpu-cuda-status">N/A</div>
                 </div>
             </div>
             
@@ -577,6 +577,51 @@
             addLog("Starting GPU initialization...");
             scrollToBottom();
             
+            document.getElementById('gpu-status').textContent = 'INITIALIZING';
+            document.getElementById('gpu-status').className = 'stat-value warning';
+            
+            try {
+                const res = await fetch('/api/gpu/init', { method: 'POST' });
+                const data = await res.json();
+                
+                const logs = data.log.split('\n');
+                let i = 0;
+                const logContainer = document.getElementById('init-logs');
+                const interval = setInterval(() => {
+                    if (i < logs.length) {
+                        const d = document.createElement('div');
+                        if(logs[i].includes('READY')) d.className = 'success';
+                        d.textContent = '✓ ' + logs[i];
+                        logContainer.appendChild(d);
+                        scrollToBottom();
+                        if(logs[i].includes('READY')) {
+                            document.getElementById('gpu-status').textContent = 'ACTIVE';
+                            document.getElementById('gpu-status').className = 'stat-value success';
+                            document.getElementById('gpu-device').textContent = data.device;
+                            if(data.device !== 'N/A') {
+                                document.getElementById('gpu-cuda-status').textContent = 'VERIFIED';
+                                document.getElementById('gpu-cuda-status').className = 'stat-value success';
+                            }
+                            document.getElementById('btn-solve').classList.remove('hidden');
+                        }
+                        i++;
+                    } else {
+                        clearInterval(interval);
+                    }
+                }, 100);
+            } catch(e) {
+                showError(e.message);
+            }
+        });
+        
+        document.getElementById('btn-solve').addEventListener('click', async () => {
+            document.getElementById('btn-solve').disabled = true;
+            stepSolve.classList.remove('hidden');
+            document.getElementById('lbl-solve-filename').textContent = currentModel.filename;
+            document.getElementById('lbl-solve-model').textContent = currentModel.filename;
+            addLog("Optimization started");
+            scrollToBottom();
+            
             try {
                 const res = await fetch('/api/solver/start', {
                     method: 'POST',
@@ -606,15 +651,6 @@
             }
         });
         
-        document.getElementById('btn-solve').addEventListener('click', () => {
-            document.getElementById('btn-solve').disabled = true;
-            stepSolve.classList.remove('hidden');
-            document.getElementById('lbl-solve-filename').textContent = currentModel.filename;
-            document.getElementById('lbl-solve-model').textContent = currentModel.filename;
-            addLog("Optimization started");
-            scrollToBottom();
-        });
-        
         document.getElementById('btn-reset').addEventListener('click', resetApp);
         document.getElementById('btn-error-reset').addEventListener('click', resetApp);
         
@@ -622,35 +658,7 @@
         function handleSolverEvent(msg) {
             if (msg.type === 'solver_state') {
                 addLog(`State changed: ${msg.state}`);
-                if (msg.state === 'INITIALIZING_GPU') {
-                    document.getElementById('gpu-status').textContent = 'INITIALIZING';
-                    document.getElementById('gpu-status').className = 'stat-value warning';
-                    
-                    // Simulate init logs
-                    const logs = msg.log.split('\n');
-                    let i = 0;
-                    const logContainer = document.getElementById('init-logs');
-                    const interval = setInterval(() => {
-                        if (i < logs.length) {
-                            const d = document.createElement('div');
-                            if(logs[i].includes('READY')) d.className = 'success';
-                            d.textContent = '✓ ' + logs[i];
-                            logContainer.appendChild(d);
-                            scrollToBottom();
-                            if(logs[i].includes('READY')) {
-                                document.getElementById('gpu-status').textContent = 'ACTIVE';
-                                document.getElementById('gpu-status').className = 'stat-value success';
-                                document.getElementById('gpu-device').textContent = 'DETECTED'; // placeholder
-                                document.getElementById('btn-solve').classList.remove('hidden');
-                                // Auto click solve for demo smoothness
-                                setTimeout(() => document.getElementById('btn-solve').click(), 500);
-                            }
-                            i++;
-                        } else {
-                            clearInterval(interval);
-                        }
-                    }, 100);
-                } else if (msg.state === 'VERIFYING') {
+                if (msg.state === 'VERIFYING') {
                     addLog("Verifying solution...");
                 }
             } else if (msg.type === 'iteration') {

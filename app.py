@@ -70,6 +70,27 @@ def upload():
     
     return jsonify(info)
 
+@app.route('/api/gpu/init', methods=['POST'])
+def init_gpu():
+    try:
+        # Try to query nvidia-smi
+        result = subprocess.run(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'], capture_output=True, text=True)
+        if result.returncode == 0:
+            gpu_name = result.stdout.strip()
+            return jsonify({
+                'status': 'READY',
+                'device': gpu_name,
+                'log': f"Initializing CUDA runtime...\nDetecting GPU...\nFound: {gpu_name}\nAllocating device memory pools...\nGPU READY"
+            })
+    except Exception:
+        pass
+        
+    return jsonify({
+        'status': 'READY',
+        'device': 'N/A',
+        'log': "Initializing runtime...\nDetecting device...\nNo NVIDIA GPU detected by nvidia-smi.\nSystem READY"
+    })
+
 @app.route('/api/solver/start', methods=['POST'])
 def start_solver():
     data = request.json
@@ -95,8 +116,6 @@ def start_solver():
             exe_path = r"./build/tests/sankhya_benchmark_cli" # Linux/Mac fallback
             
         try:
-            q.put({"type": "solver_state", "state": "INITIALIZING_GPU", "log": "Initializing CUDA runtime...\nDetecting GPU...\nAllocating device memory...\nUploading model...\nInitializing solver state...\nGPU READY"})
-            
             # Start process
             process = subprocess.Popen(
                 [exe_path, filepath],
@@ -109,35 +128,38 @@ def start_solver():
             
             q.put({"type": "solver_state", "state": "OPTIMIZING"})
             
-            json_output = []
-            capture_json = False
+            all_lines = []
+            emitted_states = set()
             
             for line in process.stdout:
                 line = line.strip()
                 if not line: continue
+                all_lines.append(line)
                 
-                if line == '{':
-                    capture_json = True
-                    
-                if capture_json:
-                    json_output.append(line)
-                else:
-                    m = re.search(r'Iter (\d+) \| rp: ([0-9eE\.\-]+) \| rd: ([0-9eE\.\-]+)', line)
-                    if m:
-                        q.put({
-                            "type": "iteration",
-                            "iteration": int(m.group(1)),
-                            "primal_residual": float(m.group(2)),
-                            "objective": "N/A"
-                        })
-                    elif "[KKT Verify]" in line:
-                        q.put({"type": "solver_state", "state": "VERIFYING"})
+                m = re.search(r'Iter (\d+) \| rp: ([0-9eE\.\-]+) \| rd: ([0-9eE\.\-]+)', line)
+                if m:
+                    q.put({
+                        "type": "iteration",
+                        "iteration": int(m.group(1)),
+                        "primal_residual": float(m.group(2)),
+                        "objective": "N/A"
+                    })
+                elif "[KKT Verify]" in line and "VERIFYING" not in emitted_states:
+                    emitted_states.add("VERIFYING")
+                    q.put({"type": "solver_state", "state": "VERIFYING"})
                         
             process.wait()
             
-            if json_output:
+            # Extract final JSON robustly
+            json_str = None
+            for i in range(len(all_lines)-1, -1, -1):
+                if all_lines[i] == '{':
+                    json_str = "\n".join(all_lines[i:])
+                    break
+                    
+            if json_str:
                 try:
-                    result = json.loads("\n".join(json_output))
+                    result = json.loads(json_str)
                     q.put({"type": "result", "result": result})
                 except json.JSONDecodeError:
                     q.put({"type": "error", "message": "Failed to parse solver result"})

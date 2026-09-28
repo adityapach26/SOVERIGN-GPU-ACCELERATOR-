@@ -85,12 +85,7 @@ inline void print_report(const std::string& instance, int iterations, const std:
     print_line("KKT verification", "KKT verification");
     print_line("Cleanup", "Cleanup");
     
-    double total_ms = 0.0;
-    for (auto& p : recs) {
-        if (p.first != "TOTAL" && p.first != "Pivot selection" && p.first != "Basis update" && p.first != "GPU kernels" && p.first != "Synchronization") {
-            // total approx sum of disjoint components
-        }
-    }
+
     
     if (recs.count("TOTAL")) {
         std::cerr << "\nTOTAL:                   " << std::fixed << std::setprecision(3) << recs["TOTAL"].total_ms << " ms\n";

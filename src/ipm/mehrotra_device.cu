@@ -45,30 +45,7 @@
 #include "profiler.hpp"
 #include <map>
 
-namespace {
-std::map<std::string, cudaEvent_t>& get_starts() {
-    static std::map<std::string, cudaEvent_t> starts;
-    return starts;
-}
-std::map<std::string, cudaEvent_t>& get_stops() {
-    static std::map<std::string, cudaEvent_t> stops;
-    return stops;
-}
-inline void start_cu(const std::string& name) {
-    if (get_starts().find(name) == get_starts().end()) {
-        cudaEventCreate(&get_starts()[name]);
-        cudaEventCreate(&get_stops()[name]);
-    }
-    cudaEventRecord(get_starts()[name]);
-}
-inline void stop_cu(const std::string& name) {
-    cudaEventRecord(get_stops()[name]);
-    cudaEventSynchronize(get_stops()[name]);
-    float ms = 0;
-    cudaEventElapsedTime(&ms, get_starts()[name], get_stops()[name]);
-    sankhya::profile::add_time(name, ms);
-}
-}
+
 
 namespace sankhya {
 namespace ipm {

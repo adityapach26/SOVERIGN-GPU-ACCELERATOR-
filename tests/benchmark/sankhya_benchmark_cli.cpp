@@ -10,9 +10,13 @@
 #include "simplex/phase1.hpp"
 #include "numerics/sparse_lu.hpp"
 
+#include "profiler.hpp"
+
 using namespace sankhya;
 
 int main(int argc, char** argv) {
+    profile::start_cpu("TOTAL");
+
     if (argc != 2) {
         std::cerr << "Usage: sankhya_benchmark_cli <mps_file>\n";
         return 1;
@@ -20,6 +24,7 @@ int main(int argc, char** argv) {
 
     std::string path = argv[1];
     
+    profile::start_cpu("Parsing");
     core::Model model;
     try {
         model = parsers::read_mps(path);
@@ -27,11 +32,15 @@ int main(int argc, char** argv) {
         std::cout << "{\"error\": \"" << e.what() << "\"}\n";
         return 0;
     }
+    profile::stop_cpu("Parsing");
 
     auto start_time = std::chrono::high_resolution_clock::now();
     
+    profile::start_cpu("Solver setup");
     ipm::MehrotraSolver solver(model);
-    ipm::MehrotraResult result = solver.solve();
+    profile::stop_cpu("Solver setup");
+    
+    sankhya::profile::start_cpu("GPU kernels"); ipm::MehrotraResult result = solver.solve(); sankhya::profile::stop_cpu("GPU kernels");
 
     std::string status_str;
     Float obj_val = 0.0;
@@ -43,8 +52,11 @@ int main(int argc, char** argv) {
         status_str = "Optimal";
         obj_val = result.objective_value;
         prim_res = result.primal_residual;
+        profile::start_cpu("Certificate");
         cert_pass = verifier::verify_optimal(model, result.x, result.pi);
+        profile::stop_cpu("Certificate");
     } else if (result.status == simplex::SimplexStatus::IterationLimit) {
+        profile::start_cpu("Fallback");
         // Fallback
         simplex::Basis basis;
         std::vector<Float> x;
@@ -67,16 +79,32 @@ int main(int argc, char** argv) {
             }
             factorizer.btran(pi);
             
+            profile::start_cpu("Certificate");
             cert_pass = verifier::verify_optimal(model, x, pi, &prim_res);
+            profile::stop_cpu("Certificate");
         } else {
             status_str = "FailedRecovery";
         }
+        profile::stop_cpu("Fallback");
     } else {
         status_str = "Failed";
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> solve_time_ms = end_time - start_time;
+
+    profile::start_cpu("Cleanup");
+    // Cleanup pseudo timing
+    profile::stop_cpu("Cleanup");
+    
+    profile::stop_cpu("TOTAL");
+
+    // Print profiling report to stdout/stderr or to file?
+    // Since we need to keep JSON output clean, we can print profiling report to STDERR
+    // Wait, the python harness captures capture_output=True and will log it.
+    // If we print to stderr, it won't corrupt JSON output!
+    // But our profiler currently prints to std::cout!
+    // Let's modify profiler.hpp to print to std::cerr.
 
     // JSON output
     std::cout << "{\n";
@@ -91,6 +119,9 @@ int main(int argc, char** argv) {
     std::cout << "  \"nnz\": " << model.A.values.size() << ",\n";
     std::cout << "  \"certificate_pass\": " << (cert_pass ? "true" : "false") << "\n";
     std::cout << "}\n";
+
+    // Call print report
+    profile::print_report(path, iterations, status_str);
 
     return 0;
 }

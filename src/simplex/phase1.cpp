@@ -61,6 +61,7 @@
  */
 
 #include "phase1.hpp"
+#include "profiler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -289,8 +290,10 @@ SimplexStatus solve_with_phase1(
     // ------------------------------------------------------------------
     // Step 3 — Run Phase I (primal simplex on Phase-I model)
     // ------------------------------------------------------------------
+    sankhya::profile::start_cpu("Simplex");
     SimplexStatus p1_status =
         primal_simplex_phase2(model_p1, basis_p1, x_p1, factorizer);
+    sankhya::profile::stop_cpu("Simplex");
 
     if (p1_status == SimplexStatus::IterationLimit) {
         return SimplexStatus::IterationLimit;
@@ -439,7 +442,10 @@ SimplexStatus solve_with_phase1(
     // ------------------------------------------------------------------
     // Step 7 — Run Phase II on the original model
     // ------------------------------------------------------------------
-    return primal_simplex_phase2(model, basis, x, factorizer);
+    sankhya::profile::start_cpu("Simplex");
+    auto res = primal_simplex_phase2(model, basis, x, factorizer);
+    sankhya::profile::stop_cpu("Simplex");
+    return res;
 }
 
 } // namespace simplex

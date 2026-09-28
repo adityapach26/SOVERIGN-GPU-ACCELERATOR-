@@ -674,7 +674,11 @@ MehrotraResult MehrotraSolver::Impl::solve() {
                   << std::endl;
 
         if (!verify_newton_direction(d_dx_aff_, d_r_kkt_, d_ds_aff_, d_r_xs_, norm_rp, norm_rd)) {
-            result.status = simplex::SimplexStatus::Infeasible;
+            // verify_newton_direction rejected the predictor direction.
+            // This is a NUMERICAL FAILURE (ill-conditioned KKT system, residual too large),
+            // NOT a mathematically certified infeasibility result.
+            // Use IterationLimit so the Phase-I recovery path can be invoked by the caller.
+            result.status = simplex::SimplexStatus::IterationLimit;
             result.iterations = iter;
             break;
         }

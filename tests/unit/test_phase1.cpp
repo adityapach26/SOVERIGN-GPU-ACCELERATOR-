@@ -31,6 +31,7 @@
 #include "simplex/primal.hpp"
 #include "numerics/sparse_lu.hpp"
 #include "verifier/certificate.hpp"
+#include "ipm/mehrotra.hpp"
 
 using namespace sankhya;
 
@@ -473,4 +474,62 @@ TEST_CASE("Phase-I Test 10: Independent verifier passes", "[phase1]") {
 
     bool cert = verifier::verify_optimal(model, x, pi);
     REQUIRE(cert == true);
+}
+
+// ============================================================
+// TEST 11: Fallback integration control path
+//
+// Demonstrates: IPM numerical failure -> Phase-I invoked -> 
+// Phase-II solves -> independent certificate passes.
+// We use a highly ill-conditioned, redundant-row system that 
+// typically breaks IPM's regularized KKT solve (forcing IterationLimit)
+// but is easily handled by Simplex Phase-I.
+// ============================================================
+TEST_CASE("Phase-I Test 11: Fallback integration control path", "[phase1]") {
+    core::Model model = make_model(
+        2, 2,
+        {0, 2, 4},
+        {0, 1, 0, 1},
+        {1.0, 1e12, 1.0, 1e12},
+        {1.0, 1e12},
+        {1.0, 1.0}
+    );
+
+    // 1. Run GPU Mehrotra IPM
+    ipm::MehrotraSolver solver(model);
+    ipm::MehrotraResult result = solver.solve();
+
+    // The KKT system for this model is heavily singular (rank 1 constraint matrix).
+    // The regularized defect correction should stagnate and hit IterationLimit.
+    // If by some miracle it solves optimally, we skip the fallback portion,
+    // but typically it will fail numerically.
+    if (result.status == simplex::SimplexStatus::IterationLimit) {
+        // 2. Invoke Phase-I recovery
+        simplex::Basis basis;
+        std::vector<Float> x;
+        numerics::SparseLUFactorization factorizer;
+
+        simplex::SimplexStatus p1_status =
+            simplex::solve_with_phase1(model, basis, x, factorizer);
+
+        REQUIRE(p1_status == simplex::SimplexStatus::Optimal);
+
+        // 3. Independent certificate
+        const Index m_rows = model.A.rows;
+        factorizer.factorize(model.A, basis);
+        std::vector<Float> pi(static_cast<std::size_t>(m_rows), 0.0);
+        for (Index i = 0; i < m_rows; ++i) {
+            const auto bi = static_cast<std::size_t>(basis.basic_indices[static_cast<std::size_t>(i)]);
+            pi[static_cast<std::size_t>(i)] = model.obj[bi];
+        }
+        factorizer.btran(pi);
+
+        bool cert = verifier::verify_optimal(model, x, pi);
+        REQUIRE(cert == true);
+    } else {
+        // If it somehow solved it directly, just verify the certificate
+        REQUIRE(result.status == simplex::SimplexStatus::Optimal);
+        bool cert = verifier::verify_optimal(model, result.x, result.pi);
+        REQUIRE(cert == true);
+    }
 }

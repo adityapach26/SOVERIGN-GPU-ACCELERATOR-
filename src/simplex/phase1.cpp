@@ -132,6 +132,37 @@ SimplexStatus solve_with_phase1(
     const Index n = model.A.cols;
 
     // ------------------------------------------------------------------
+    // Upper-bound contract audit
+    // ------------------------------------------------------------------
+    // primal_simplex_phase2() implements a lower-bound-only ratio test.
+    // It sets nonbasic variables to 0.0 (i.e. at lb after shifting), and
+    // does NOT flip variables at their upper bound.  This means finite
+    // upper bounds are silently ignored, producing incorrect results.
+    //
+    // Policy (Option B per the architecture spec):
+    //   If the model has any finite upper bound tighter than the shifted
+    //   range, report this as an unsupported case.  Return IterationLimit
+    //   so the caller's fallback logic handles it gracefully (e.g., logs
+    //   the limitation) without claiming a wrong solution.
+    //
+    // Exception: FX variables (lb == ub) are handled correctly because
+    //   they can be substituted / fixed at their value during shifting
+    //   and their shifted range is [0,0].  A variable with ub-lb == 0
+    //   is effectively a constant and the simplex never changes it.
+    for (Index j = 0; j < n; ++j) {
+        const auto jj = static_cast<std::size_t>(j);
+        const Float lbj = model.lb[jj];
+        const Float ubj = model.ub[jj];
+        const Float shifted_ub = ubj - lbj;
+        if (shifted_ub < math::kInfinity * 0.5 && shifted_ub > math::kDefaultFeasibilityTol) {
+            // This variable has a finite, non-trivial upper bound that
+            // the current Phase-II simplex cannot respect.
+            // Return IterationLimit (unsupported, not mathematically infeasible).
+            return SimplexStatus::IterationLimit;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Step 0 — Compute shifted RHS: b' = b - A * lb
     // ------------------------------------------------------------------
     std::vector<Float> b_shifted(static_cast<std::size_t>(m), 0.0);
@@ -368,11 +399,16 @@ SimplexStatus solve_with_phase1(
                 if (pivot_col != -1) break;
             }
             if (pivot_col == -1) {
-                // Truly redundant row with no original variable involvement.
-                // We cannot remove the artificial.  Feasibility holds (art=0),
-                // but Phase II cannot be safely called.  Return infeasible to
-                // signal the recovery path cannot proceed.
-                return SimplexStatus::Infeasible;
+                // Truly redundant row: no original variable appears in this row
+                // after basis transformation.  The artificial is at value 0,
+                // so the system IS FEASIBLE, but the constraint matrix is
+                // rank-deficient here and Phase II cannot be safely invoked.
+                //
+                // OPTION B (architecture spec): Report IterationLimit to signal
+                // "the recovery path does not support this rank-deficient model"
+                // rather than falsely claiming mathematical infeasibility.
+                // The caller should log this limitation and not attempt Phase II.
+                return SimplexStatus::IterationLimit;
             }
             // Use this column despite a possibly tiny pivot (degenerate case).
             // Extract and FTRAN to get pivot_val for basis update.
@@ -415,8 +451,8 @@ SimplexStatus solve_with_phase1(
         const auto ii = static_cast<std::size_t>(i);
         if (basis_p1.basic_indices[ii] >= n) {
             // Still has an artificial; this should not happen after the loop above.
-            // Return infeasibility as a safety net.
-            return SimplexStatus::Infeasible;
+            // Return IterationLimit (unsupported/failure) rather than Infeasible.
+            return SimplexStatus::IterationLimit;
         }
     }
 

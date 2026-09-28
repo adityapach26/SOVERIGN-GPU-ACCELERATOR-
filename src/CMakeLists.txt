@@ -7,6 +7,7 @@ add_library(sankhya_core
     numerics/perturbation.cpp
     mrpl/mccormick.cpp
     simplex/primal.cpp
+    simplex/phase1.cpp
     simplex/dual.cpp
     ipm/symbolic.cpp
     presolve/scaling.cpp

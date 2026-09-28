@@ -26,7 +26,8 @@ namespace verifier {
 bool verify_optimal(
     const core::Model& model,
     const std::vector<Float>& x,
-    const std::vector<Float>& pi
+    const std::vector<Float>& pi,
+    Float* out_primal_residual = nullptr
 );
 
 } // namespace verifier

@@ -60,9 +60,6 @@ int main(int argc, char** argv) {
             // compute obj
             obj_val = 0.0;
             for(size_t i=0; i<x.size(); ++i) obj_val += x[i]*model.obj[i];
-            
-            prim_res = primal_residual(model, x);
-            
             // compute duals
             const Index m_rows = model.A.rows;
             factorizer.factorize(model.A, basis);
@@ -73,7 +70,7 @@ int main(int argc, char** argv) {
             }
             factorizer.btran(pi);
             
-            cert_pass = verifier::verify_optimal(model, x, pi);
+            cert_pass = verifier::verify_optimal(model, x, pi, &prim_res);
         } else {
             status_str = "FailedRecovery";
         }

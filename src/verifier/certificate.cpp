@@ -8,7 +8,7 @@ namespace verifier {
 bool verify_optimal(
     const core::Model& model,
     const std::vector<Float>& x,
-    const std::vector<Float>& pi
+    const std::vector<Float>& pi, Float* out_primal_residual
 ) {
     // 1. Dimensional validation
     if (x.size() != static_cast<std::size_t>(model.A.cols)) {
@@ -75,14 +75,22 @@ bool verify_optimal(
             Ax[static_cast<std::size_t>(i)] += val * xj;
         }
     }
+    
+    double local_primal_res = 0.0;
     for (std::size_t i = 0; i < m; ++i) {
         double res = std::abs(Ax[i] - static_cast<double>(model.rhs[i]));
+        if (res > local_primal_res) {
+            local_primal_res = res;
+        }
         if (res >= epsilon_feas) {
             std::cout << "Certificate failure:\ncomponent: primal Ax=b\nrow: " << i 
                       << "\nAx: " << Ax[i] << "\nb: " << model.rhs[i] 
                       << "\nresidual: " << res << "\n";
             return false;
         }
+    }
+    if (out_primal_residual) {
+        *out_primal_residual = static_cast<Float>(local_primal_res);
     }
 
     // 3 & 4. Dual Feasibility and Complementary Slackness

@@ -2,74 +2,50 @@ import subprocess
 import time
 import json
 import os
+import shutil
 
 def solve_mps(mps_path):
     try:
+        highs_exec = shutil.which("highs")
+        if not highs_exec:
+            # Fallback to known T4 environment path
+            fallback_path = "/content/HiGHS/build/bin/highs"
+            if os.path.exists(fallback_path):
+                highs_exec = fallback_path
+            else:
+                return {"solver": "HiGHS", "status": "BASELINE UNAVAILABLE"}
+
         start_time = time.perf_counter()
         # Ensure we run highs without interactive prompt
-        result = subprocess.run(["highs", "--model_file", mps_path], capture_output=True, text=True, check=False)
+        result = subprocess.run([highs_exec, "--model_file", mps_path], capture_output=True, text=True, check=False)
         end_time = time.perf_counter()
         
-        solve_time_ms = round((end_time - start_time) * 1000, 3)
-        
-        if result.returncode != 0 and "Model status" not in result.stdout and "Model   status" not in result.stdout:
-            return {"solver": "HiGHS", "status": "Failed", "solve_time_ms": solve_time_ms}
+        if result.returncode != 0 and "Model status" not in result.stdout:
+            return {"solver": "HiGHS", "status": "Failed", "solve_time_ms": (end_time - start_time)*1000}
             
         status = "Optimal" if "Optimal" in result.stdout else "Unknown"
         
         # parse objective
         obj = 0.0
         iters = 0
-        vars_count = ""
-        cons_count = ""
-        nnz_count = ""
-        version = ""
-        
         for line in result.stdout.split("\n"):
-            line_lower = line.lower()
-            if "objective value" in line_lower:
+            if "Objective value" in line:
                 try:
                     obj = float(line.split(":")[1].strip())
                 except:
                     pass
-            elif "iteration count" in line_lower or "iterations" in line_lower:
-                if ":" in line:
-                    try:
-                        iters = int(line.split(":")[1].strip())
-                    except:
-                        pass
-            elif "number of variables" in line_lower or "number of columns" in line_lower:
-                if ":" in line:
-                    try:
-                        vars_count = int(line.split(":")[1].strip())
-                    except:
-                        pass
-            elif "number of constraints" in line_lower or "number of rows" in line_lower:
-                if ":" in line:
-                    try:
-                        cons_count = int(line.split(":")[1].strip())
-                    except:
-                        pass
-            elif "number of nonzeros" in line_lower:
-                if ":" in line:
-                    try:
-                        nnz_count = int(line.split(":")[1].strip())
-                    except:
-                        pass
-            elif "highs version" in line_lower:
-                # e.g. "Running HiGHS 1.5.0 [date: 2023...]"
-                version = line.strip()
+            if "Iteration count" in line:
+                try:
+                    iters = int(line.split(":")[1].strip())
+                except:
+                    pass
                     
         return {
             "solver": "HiGHS",
             "status": status,
-            "solve_time_ms": solve_time_ms,
+            "solve_time_ms": (end_time - start_time) * 1000,
             "iterations": iters,
-            "objective": obj,
-            "variables": vars_count,
-            "constraints": cons_count,
-            "nnz": nnz_count,
-            "version": version
+            "objective": obj
         }
     except FileNotFoundError:
         return {"solver": "HiGHS", "status": "BASELINE UNAVAILABLE"}

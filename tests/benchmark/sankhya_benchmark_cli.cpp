@@ -37,7 +37,6 @@ int main(int argc, char** argv) {
     Float obj_val = 0.0;
     Float prim_res = 0.0;
     bool cert_pass = false;
-    bool fallback_triggered = false;
     Index iterations = result.iterations;
 
     if (result.status == simplex::SimplexStatus::Optimal) {
@@ -46,33 +45,7 @@ int main(int argc, char** argv) {
         prim_res = result.primal_residual;
         cert_pass = verifier::verify_optimal(model, result.x, result.pi);
     } else if (result.status == simplex::SimplexStatus::IterationLimit) {
-        // Fallback
-        fallback_triggered = true;
-        simplex::Basis basis;
-        std::vector<Float> x;
-        numerics::SparseLUFactorization factorizer;
-
-        simplex::SimplexStatus p1_status = simplex::solve_with_phase1(model, basis, x, factorizer);
-        
-        if (p1_status == simplex::SimplexStatus::Optimal) {
-            status_str = "Optimal";
-            // compute obj
-            obj_val = 0.0;
-            for(size_t i=0; i<x.size(); ++i) obj_val += x[i]*model.obj[i];
-            // compute duals
-            const Index m_rows = model.A.rows;
-            factorizer.factorize(model.A, basis);
-            std::vector<Float> pi(static_cast<std::size_t>(m_rows), 0.0);
-            for (Index i = 0; i < m_rows; ++i) {
-                const auto bi = static_cast<std::size_t>(basis.basic_indices[static_cast<std::size_t>(i)]);
-                pi[static_cast<std::size_t>(i)] = model.obj[bi];
-            }
-            factorizer.btran(pi);
-            
-            cert_pass = verifier::verify_optimal(model, x, pi, &prim_res);
-        } else {
-            status_str = "FailedRecovery";
-        }
+        status_str = "NumericalFailure";
     } else {
         status_str = "Failed";
     }
@@ -92,8 +65,7 @@ int main(int argc, char** argv) {
     std::cout << "  \"constraints\": " << model.rhs.size() << ",\n";
     std::cout << "  \"nnz\": " << model.A.values.size() << ",\n";
     std::cout << "  \"certificate_pass\": " << (cert_pass ? "true" : "false") << ",\n";
-    std::cout << "  \"execution_path\": \"" << (fallback_triggered ? "GPU+CPU_RECOVERY" : "GPU_ONLY") << "\",\n";
-    std::cout << "  \"fallback_triggered\": \"" << (fallback_triggered ? "YES" : "NO") << "\"\n";
+    std::cout << "  \"fallback_triggered\": \"NO\"\n";
     std::cout << "}\n";
 
     return 0;

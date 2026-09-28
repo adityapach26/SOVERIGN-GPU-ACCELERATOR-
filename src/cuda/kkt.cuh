@@ -119,6 +119,32 @@ private:
     cusparseDnVecDescr_t vec_z_;
     void* d_spsv_buffer_L_ = nullptr;
     void* d_spsv_buffer_LT_ = nullptr;
+    
+    // Persistent buffers for solver iterations
+    Float* d_rhs_perm_orig_;
+    Float* d_dy_perm_;
+    Float* d_dy_backup_;
+    Float* d_r_perm_;
+    Float* d_correction_;
+    Float* d_D_eq_;
+    Float* d_r_eq_;
+    Float* d_diag_spmv_;
+    Float* d_diag_sub_;
+    Float* d_ones_;
+    
+    cusparseDnVecDescr_t vec_r_eq_;
+    cusparseDnVecDescr_t vec_dy_perm_;
+    cusparseDnVecDescr_t vec_correction_;
+    cusparseDnVecDescr_t vec_ones_;
+    cusparseDnVecDescr_t vec_diag_spmv_;
+    
+    // Method B SpMV
+    cusparseSpMatDescr_t descr_M_orig_;
+    cusparseSpMatDescr_t descr_M0_;
+    cusparseSpMatDescr_t descr_Mdelta_;
+    cusparseSpMatDescr_t descr_L_general_;
+    void* d_spmv_diag_buf_ = nullptr;
+    void* d_spmv_meth_b_buf_ = nullptr;
 
     void initialize_cusparse();
 };

@@ -186,7 +186,7 @@ TEST_CASE("Phase 15.2b: KKT physical relative residual contract", "[cuda][kkt][i
     double r0 = 6.0*rhs_scaled[0] + rhs_scaled[1] + rhs_scaled[2] - 11.0*scale;
     double r1 = rhs_scaled[0]     + 5.0*rhs_scaled[1]              - 11.0*scale;
     double r2 = rhs_scaled[0]                      + 5.0*rhs_scaled[2] - 16.0*scale;
-    double abs_M0_res = std::max({std::abs(r0), std::abs(r1), std::abs(r2)});
+    double abs_M0_res = std::max(std::abs(r0), std::max(std::abs(r1), std::abs(r2)));
     double rhs_norm_val = std::max(1.0, 16.0 * scale); // max component of rhs
     double rel_M0_res = abs_M0_res / rhs_norm_val;
 

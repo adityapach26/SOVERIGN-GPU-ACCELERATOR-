@@ -339,7 +339,6 @@ SimplexStatus solve_with_phase1(
 
         // Row i has an artificial in the basis. Find pivot from original cols.
         Index pivot_col = -1;
-        Float pivot_val = 0.0;
 
         for (Index j = 0; j < n; ++j) {
             const auto jj = static_cast<std::size_t>(j);
@@ -362,7 +361,6 @@ SimplexStatus solve_with_phase1(
             if (std::abs(d_i) > math::kDefaultPivotTol) {
                 // Accept first (smallest j) eligible pivot for determinism
                 pivot_col = j;
-                pivot_val = d_i;
                 break;
             }
         }
@@ -409,17 +407,6 @@ SimplexStatus solve_with_phase1(
                 return SimplexStatus::IterationLimit;
             }
             // Use this column despite a possibly tiny pivot (degenerate case).
-            // Extract and FTRAN to get pivot_val for basis update.
-            std::vector<Float> col_j(static_cast<std::size_t>(m), 0.0);
-            const Index col_start = model_p1.A.col_ptrs[static_cast<std::size_t>(pivot_col)];
-            const Index col_end   = model_p1.A.col_ptrs[static_cast<std::size_t>(pivot_col) + 1];
-            for (Index k = col_start; k < col_end; ++k) {
-                const auto kk = static_cast<std::size_t>(k);
-                col_j[static_cast<std::size_t>(model_p1.A.row_indices[kk])] =
-                    model_p1.A.values[kk];
-            }
-            factorizer.ftran(col_j);
-            pivot_val = col_j[ii];
         }
 
         // Perform the basis exchange: pivot_col enters row i.

@@ -34,7 +34,6 @@ int main(int argc, char** argv) {
     ipm::MehrotraResult result = solver.solve();
 
     std::string status_str;
-    bool is_optimal = false;
     Float obj_val = 0.0;
     Float prim_res = 0.0;
     bool cert_pass = false;
@@ -42,7 +41,6 @@ int main(int argc, char** argv) {
 
     if (result.status == simplex::SimplexStatus::Optimal) {
         status_str = "Optimal";
-        is_optimal = true;
         obj_val = result.objective_value;
         prim_res = result.primal_residual;
         cert_pass = verifier::verify_optimal(model, result.x, result.pi);
@@ -56,7 +54,6 @@ int main(int argc, char** argv) {
         
         if (p1_status == simplex::SimplexStatus::Optimal) {
             status_str = "Optimal";
-            is_optimal = true;
             // compute obj
             obj_val = 0.0;
             for(size_t i=0; i<x.size(); ++i) obj_val += x[i]*model.obj[i];

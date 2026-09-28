@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     std::cout << "  \"solver\": \"SANKHYA\",\n";
     std::cout << "  \"status\": \"" << status_str << "\",\n";
     std::cout << "  \"execution_path\": \"" << (fallback_triggered ? "GPU+CPU_RECOVERY" : "GPU_ONLY") << "\",\n";
-    std::cout << "  \"fallback_triggered\": " << (fallback_triggered ? "true" : "false") << ",\n";
+    std::cout << "  \"fallback_triggered\": \"" << (fallback_triggered ? "YES" : "NO") << "\",\n";
     std::cout << "  \"solve_time_ms\": " << solve_time_ms.count() << ",\n";
     std::cout << "  \"iterations\": " << iterations << ",\n";
     std::cout << "  \"objective\": " << obj_val << ",\n";

@@ -496,7 +496,6 @@
                                     <div class="data-label">STATUS</div><div class="data-value success">CERTIFIED</div>
                                     <div class="data-label">CERTIFICATE</div><div class="data-value" id="res-cert"></div>
                                     <div class="data-label">PRIMAL RESIDUAL</div><div class="data-value" id="res-pres"></div>
-                                    <div class="data-label">EXECUTION PATH</div><div class="data-value" id="res-path"></div>
                                 </div>
                             </div>
                             
@@ -851,17 +850,6 @@
                 document.getElementById('res-cert').innerHTML = pass ? '<span class="success">PASS</span>' : '<span class="error">FAIL</span>';
                 document.getElementById('res-pres').textContent = res.primal_residual ? res.primal_residual.toExponential(2) : '—';
                 
-                const fallback = res.fallback_triggered === "YES";
-                let execPath = fallback ? "GPU + CPU RECOVERY" : "GPU_ONLY";
-                
-                let pathHtml = execPath;
-                if(fallback) {
-                    pathHtml += '<br><span style="font-size:0.75rem; color:var(--warning);">FALLBACK: YES</span>';
-                }
-                document.getElementById('res-path').innerHTML = pathHtml;
-                if(fallback) document.getElementById('res-path').className = 'data-value warning';
-                
-                // Result block
                 document.getElementById('res-title').textContent = res.status.toUpperCase();
                 document.getElementById('res-title').className = res.status === 'Optimal' ? 'success' : 'warning';
                 

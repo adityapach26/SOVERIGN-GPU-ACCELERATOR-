@@ -352,7 +352,6 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     size_t P_bytes = m_ * sizeof(Index);
     d_P_ = static_cast<Index*>(arena_.allocate(P_bytes));
 
-    d_D_eq_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
     CHECK_CUDA(cudaMemcpy(d_P_, sym.P.data(), P_bytes, cudaMemcpyHostToDevice));
 
     // 5. Allocate intermediate vectors
@@ -500,15 +499,17 @@ void GPUKKTCholeskySolver::initialize_cusparse() {
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_diag_spmv_, m_, d_diag_spmv_, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_ones_, m_, d_ones_, CUDA_R_64F));
 
-    size_t spmv_buf1 = 0, spmv_buf2 = 0, spmv_buf3 = 0;
+    size_t spmv_buf1 = 0, spmv_buf2 = 0, spmv_buf3 = 0, spmv_buf4 = 0;
     Float beta_zero = 0.0;
     CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_M0_, vec_dy_perm_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf1));
     CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta_, vec_ones_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf2));
     CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_general_, vec_ones_, &beta_zero, vec_z_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf3));
+    CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_general_, vec_ones_, &beta_zero, vec_z_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf4));
 
     size_t max_spmv_buf = spmv_buf1;
     if (spmv_buf2 > max_spmv_buf) max_spmv_buf = spmv_buf2;
     if (spmv_buf3 > max_spmv_buf) max_spmv_buf = spmv_buf3;
+    if (spmv_buf4 > max_spmv_buf) max_spmv_buf = spmv_buf4;
     if (max_spmv_buf > 0) {
         d_spmv_meth_b_buf_ = arena_.allocate(max_spmv_buf);
     }

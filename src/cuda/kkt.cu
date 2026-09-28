@@ -492,6 +492,26 @@ void GPUKKTCholeskySolver::initialize_cusparse() {
         d_spsv_buffer_LT_ = arena_.allocate(bufferSize2);
     }
 
+
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_r_eq_, m_, d_r_eq_, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_z_, m_, d_z_, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_dy_perm_, m_, d_dy_perm_, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_correction_, m_, d_correction_, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_diag_spmv_, m_, d_diag_spmv_, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_ones_, m_, d_ones_, CUDA_R_64F));
+
+    size_t spmv_buf1 = 0, spmv_buf2 = 0, spmv_buf3 = 0;
+    Float beta_zero = 0.0;
+    CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_M0_, vec_dy_perm_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf1));
+    CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta_, vec_ones_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf2));
+    CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_general_, vec_ones_, &beta_zero, vec_z_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf3));
+
+    size_t max_spmv_buf = spmv_buf1;
+    if (spmv_buf2 > max_spmv_buf) max_spmv_buf = spmv_buf2;
+    if (spmv_buf3 > max_spmv_buf) max_spmv_buf = spmv_buf3;
+    if (max_spmv_buf > 0) {
+        d_spmv_meth_b_buf_ = arena_.allocate(max_spmv_buf);
+    }
     CHECK_CUSPARSE(cusparseDestroyDnVec(dummy_vec_x));
     CHECK_CUSPARSE(cusparseDestroyDnVec(dummy_vec_y));
     CHECK_CUDA(cudaFree(dummy_x));
@@ -503,6 +523,15 @@ GPUKKTCholeskySolver::~GPUKKTCholeskySolver() {
         cusparseSpSV_destroyDescr(spsv_descr_L_);
         cusparseSpSV_destroyDescr(spsv_descr_LT_);
         cusparseDestroySpMat(descr_L_);
+        cusparseDestroySpMat(descr_M0_);
+        cusparseDestroySpMat(descr_Mdelta_);
+        cusparseDestroySpMat(descr_L_general_);
+        cusparseDestroyDnVec(vec_r_eq_);
+        cusparseDestroyDnVec(vec_z_);
+        cusparseDestroyDnVec(vec_dy_perm_);
+        cusparseDestroyDnVec(vec_correction_);
+        cusparseDestroyDnVec(vec_diag_spmv_);
+        cusparseDestroyDnVec(vec_ones_);
         cusparseDestroy(handle_);
     }
 }
@@ -627,17 +656,6 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     int blocks_diag = (m_ + 255) / 256;
     fill_ones_kernel<<<blocks_diag, 256>>>(m_, d_ones_);
 
-    Index nnz_M = 0;
-    CHECK_CUDA(cudaMemcpy(&nnz_M, d_M_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
-    cusparseSpMatDescr_t descr_M0_, descr_Mdelta_;
-    CHECK_CUSPARSE(cusparseCreateCsr(&descr_M0_, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
-    CHECK_CUSPARSE(cusparseCreateCsr(&descr_Mdelta_, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
-    
-    Index nnz_L = 0;
-    CHECK_CUDA(cudaMemcpy(&nnz_L, d_L_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
-    cusparseSpMatDescr_t descr_L_general_;
-    CHECK_CUSPARSE(cusparseCreateCsr(&descr_L_general_, m_, m_, nnz_L, d_L_row_ptrs_, d_L_col_indices_, d_L_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
-    
 
     
     Float delta = kIPMNormalEquationRegularization;

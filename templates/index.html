@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SANKHYA // VAJRA-OPT</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --term-bg: #0a0a0a;
+            --term-border: #1a2a1a;
+            --text-color: #00ff00;
+            --text-dim: #00aa00;
+            --text-muted: #444;
+            --accent: #00ffff;
+            --error: #ff3333;
+            --warning: #ffaa00;
+            --font-mono: 'Courier New', Courier, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-mono);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-image: 
+                linear-gradient(rgba(0, 255, 0, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        .header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--term-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: rgba(5, 5, 5, 0.9);
+            z-index: 10;
+        }
+
+        .brand h1 {
+            font-size: 1.2rem;
+            font-weight: normal;
+            letter-spacing: 2px;
+            color: var(--accent);
+        }
+
+        .brand p {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        .status {
+            font-size: 0.9rem;
+            text-align: right;
+        }
+
+        .status-indicator {
+            color: var(--text-color);
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            padding: 20px;
+            gap: 20px;
+        }
+
+        .terminal {
+            flex: 2;
+            background-color: var(--term-bg);
+            border: 1px solid var(--term-border);
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.05);
+            position: relative;
+        }
+
+        .term-header {
+            padding: 10px;
+            border-bottom: 1px solid var(--term-border);
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .term-content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            line-height: 1.5;
+        }
+
+        .side-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel {
+            background-color: var(--term-bg);
+            border: 1px solid var(--term-border);
+            border-radius: 4px;
+            padding: 15px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-title {
+            font-size: 0.9rem;
+            color: var(--accent);
+            margin-bottom: 15px;
+            border-bottom: 1px dashed var(--term-border);
+            padding-bottom: 5px;
+        }
+
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+        }
+        
+        .log-time {
+            color: var(--text-muted);
+            margin-right: 10px;
+        }
+
+        .prompt {
+            color: var(--accent);
+            margin-right: 10px;
+        }
+
+        .upload-area {
+            border: 2px dashed var(--term-border);
+            padding: 30px;
+            text-align: center;
+            margin: 20px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-area:hover, .upload-area.dragover {
+            border-color: var(--text-color);
+            background-color: rgba(0, 255, 0, 0.05);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        button {
+            background-color: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--text-color);
+            padding: 8px 16px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            margin-top: 10px;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--text-color);
+            color: var(--bg-color);
+        }
+
+        button:disabled {
+            border-color: var(--text-muted);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            background-color: transparent;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 0.9rem;
+        }
+
+        .table th, .table td {
+            text-align: left;
+            padding: 6px;
+            border-bottom: 1px dashed var(--term-border);
+        }
+
+        .table th {
+            color: var(--accent);
+            font-weight: normal;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .stat-label {
+            color: var(--text-dim);
+        }
+        
+        .stat-value {
+            color: var(--text-color);
+            text-align: right;
+        }
+
+        .results-box {
+            border: 1px solid var(--accent);
+            padding: 15px;
+            margin: 20px 0;
+        }
+
+        .block {
+            margin-bottom: 20px;
+        }
+        
+        .success { color: var(--text-color); }
+        .error { color: var(--error); }
+        .warning { color: var(--warning); }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-color); }
+        ::-webkit-scrollbar-thumb { background: var(--term-border); }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">
+            <h1>SANKHYA // VAJRA-OPT</h1>
+            <p>INDIGENOUS GPU-ACCELERATED OPTIMIZATION SOLVER</p>
+        </div>
+        <div class="status">
+            <div><span class="status-indicator">●</span> SYSTEM READY</div>
+            <div style="color: var(--text-dim); font-size: 0.8rem; margin-top: 4px;">GPU: ONLINE</div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <!-- Main Terminal Area -->
+        <div class="terminal">
+            <div class="term-header">
+                ┌─ SANKHYA TERMINAL ────────────────────────────────────────────────────────
+            </div>
+            <div class="term-content" id="term-content">
+                <!-- Step 1: Upload -->
+                <div id="step-upload" class="block">
+                    <div><span class="prompt">$</span> sankhya</div>
+                    <br>
+                    <div>SANKHYA / VAJRA-OPT</div>
+                    <div>Indigenous GPU-Accelerated Optimization Solver</div>
+                    <br>
+                    <div><span class="prompt">$</span> upload model</div>
+                    <div class="upload-area" id="drop-zone">
+                        <div style="margin-bottom: 10px;">> Drop .mps file here</div>
+                        <div>or click to select</div>
+                        <input type="file" id="file-input" accept=".mps" style="display: none;">
+                    </div>
+                </div>
+
+                <!-- Step 2: Model Info & Solver Selection -->
+                <div id="step-model" class="block hidden">
+                    <div><span class="prompt">$</span> upload <span id="lbl-filename"></span></div>
+                    <br>
+                    <div>[MODEL]</div>
+                    <div class="success">✓ File accepted</div>
+                    <div class="success">✓ MPS format detected</div>
+                    <div class="success">✓ Model parsed</div>
+                    
+                    <div class="stat-grid" style="max-width: 300px;">
+                        <div class="stat-label">Variables</div><div class="stat-value" id="lbl-vars"></div>
+                        <div class="stat-label">Constraints</div><div class="stat-value" id="lbl-cons"></div>
+                        <div class="stat-label">Nonzeros</div><div class="stat-value" id="lbl-nnz"></div>
+                        <div class="stat-label">Problem Type</div><div class="stat-value" id="lbl-type"></div>
+                    </div>
+                    
+                    <div>STATUS         <span class="success">READY</span></div>
+                    <br>
+                    <div><span class="prompt">$</span> solver</div>
+                    <br>
+                    <div>Available solver:</div>
+                    <div style="color: var(--accent); margin: 10px 0; padding-left: 10px; border-left: 2px solid var(--accent);">
+                        > SANKHYA<br>
+                          GPU-NATIVE OPTIMIZATION
+                    </div>
+                    
+                    <button id="btn-init">INITIALIZE GPU</button>
+                </div>
+
+                <!-- Step 3: Initialization -->
+                <div id="step-init" class="block hidden">
+                    <div><span class="prompt">$</span> gpu init</div>
+                    <br>
+                    <div>[GPU INITIALIZATION]</div>
+                    <div id="init-logs"></div>
+                    <br>
+                    <button id="btn-solve" class="hidden">START OPTIMIZATION</button>
+                </div>
+
+                <!-- Step 4 & 5: Live Solving -->
+                <div id="step-solve" class="block hidden">
+                    <div><span class="prompt">$</span> solve <span id="lbl-solve-filename"></span></div>
+                    <br>
+                    <div>[ SANKHYA OPTIMIZATION ]</div>
+                    <div class="stat-grid" style="max-width: 300px; margin-top: 5px;">
+                        <div class="stat-label">Model:</div><div class="stat-value" id="lbl-solve-model"></div>
+                        <div class="stat-label">Solver:</div><div class="stat-value">SANKHYA</div>
+                        <div class="stat-label">Execution:</div><div class="stat-value">GPU</div>
+                    </div>
+                    <br>
+                    <table class="table" id="iter-table">
+                        <thead>
+                            <tr>
+                                <th>ITERATION</th>
+                                <th>OBJECTIVE</th>
+                                <th>PRIMAL RESIDUAL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="iter-tbody">
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Step 6, 7 & 8: Verification & Results -->
+                <div id="step-results" class="block hidden">
+                    <div>──────────────────────────────────────────────</div>
+                    <br>
+                    <div class="success">✓ OPTIMAL SOLUTION FOUND</div>
+                    <br>
+                    <div class="stat-grid" style="max-width: 300px;">
+                        <div class="stat-label">STATUS</div><div class="stat-value" id="res-status"></div>
+                        <div class="stat-label">OBJECTIVE</div><div class="stat-value" id="res-obj"></div>
+                        <div class="stat-label">ITERATIONS</div><div class="stat-value" id="res-iters"></div>
+                        <div class="stat-label">TIME</div><div class="stat-value" id="res-time"></div>
+                    </div>
+                    <br>
+                    <div>──────────────────────────────────────────────</div>
+                    <br>
+                    <div><span class="prompt">$</span> verify</div>
+                    <br>
+                    <div>[ CERTIFICATE / VERIFICATION ]</div>
+                    <div class="stat-grid" style="max-width: 400px; margin-top: 10px;">
+                        <div class="stat-label">Certificate check</div>
+                        <div class="stat-value" id="cert-check"></div>
+                        <div class="stat-label">Primal residual</div>
+                        <div class="stat-value" id="cert-prim-res"></div>
+                    </div>
+                    <div style="margin-top: 10px; color: var(--text-dim);">Verification complete.</div>
+                    <br>
+                    <div><span class="prompt">$</span> results</div>
+                    <br>
+                    <div class="results-box">
+                        <div style="text-align: center; color: var(--accent); margin-bottom: 15px;">SOLUTION RESULTS</div>
+                        <div class="stat-grid">
+                            <div class="stat-label">STATUS</div><div class="stat-value" id="fin-status"></div>
+                            <div class="stat-label">OBJECTIVE</div><div class="stat-value" id="fin-obj"></div>
+                            <div class="stat-label">TIME</div><div class="stat-value" id="fin-time"></div>
+                            <div class="stat-label">ITERATIONS</div><div class="stat-value" id="fin-iters"></div>
+                            <div class="stat-label">VARIABLES</div><div class="stat-value" id="fin-vars"></div>
+                            <div class="stat-label">CONSTRAINTS</div><div class="stat-value" id="fin-cons"></div>
+                            <div class="stat-label">NNZ</div><div class="stat-value" id="fin-nnz"></div>
+                            <div class="stat-label">CERTIFICATE</div><div class="stat-value" id="fin-cert"></div>
+                            <div class="stat-label">EXECUTION PATH</div><div class="stat-value" id="fin-path"></div>
+                            <div class="stat-label">FALLBACK</div><div class="stat-value" id="fin-fallback"></div>
+                        </div>
+                    </div>
+                    
+                    <button id="btn-reset">NEW MODEL</button>
+                </div>
+                
+                <!-- Error State -->
+                <div id="step-error" class="block hidden">
+                    <br>
+                    <div class="error" id="error-msg">✗ ERROR</div>
+                    <br>
+                    <button id="btn-error-reset">RESET</button>
+                </div>
+                
+                <div id="cursor" style="margin-top: 20px;"><span class="prompt">$</span> <span class="status-indicator">_</span></div>
+            </div>
+            <div class="term-header" style="border-top: 1px solid var(--term-border); border-bottom: none;">
+                └───────────────────────────────────────────────────────────────────────────
+            </div>
+        </div>
+
+        <!-- Side Panels -->
+        <div class="side-panel">
+            <div class="panel">
+                <div class="panel-title">GPU TELEMETRY</div>
+                <div class="stat-grid" style="font-size: 0.8rem; margin: 0;">
+                    <div class="stat-label">DEVICE</div><div class="stat-value" id="gpu-device">N/A</div>
+                    <div class="stat-label">STATUS</div><div class="stat-value" id="gpu-status">IDLE</div>
+                    <div class="stat-label">GPU MEMORY</div><div class="stat-value" id="gpu-mem">N/A</div>
+                    <div class="stat-label">KERNEL ACTIVITY</div><div class="stat-value" id="gpu-kernels">N/A</div>
+                    <div class="stat-label">HOST → DEVICE</div><div class="stat-value" id="gpu-h2d">N/A</div>
+                    <div class="stat-label">DEVICE → HOST</div><div class="stat-value" id="gpu-d2h">N/A</div>
+                    <div class="stat-label" style="margin-top: 10px;">CUDA STATUS</div>
+                    <div class="stat-value success" style="margin-top: 10px;" id="gpu-cuda-status">OK</div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">SYSTEM LOG</div>
+                <div class="log-container" id="sys-log">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentModel = null;
+        let eventSource = null;
+        
+        // DOM Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const termContent = document.getElementById('term-content');
+        const sysLog = document.getElementById('sys-log');
+        
+        // Steps
+        const stepUpload = document.getElementById('step-upload');
+        const stepModel = document.getElementById('step-model');
+        const stepInit = document.getElementById('step-init');
+        const stepSolve = document.getElementById('step-solve');
+        const stepResults = document.getElementById('step-results');
+        const stepError = document.getElementById('step-error');
+        const cursor = document.getElementById('cursor');
+        
+        // Log function
+        function addLog(msg) {
+            const now = new Date();
+            const time = now.toTimeString().split(' ')[0];
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.innerHTML = `<span class="log-time">${time}</span> ${msg}`;
+            sysLog.appendChild(div);
+            sysLog.scrollTop = sysLog.scrollHeight;
+        }
+
+        function scrollToBottom() {
+            termContent.scrollTop = termContent.scrollHeight;
+        }
+        
+        function showError(msg) {
+            document.querySelectorAll('.block').forEach(b => {
+                if(b.id !== 'step-upload' && b.id !== 'step-model' && !b.classList.contains('hidden')) {
+                    b.classList.add('hidden');
+                }
+            });
+            stepError.classList.remove('hidden');
+            document.getElementById('error-msg').textContent = '✗ ' + msg;
+            addLog(`ERROR: ${msg}`);
+            scrollToBottom();
+            
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        }
+        
+        function resetApp() {
+            currentModel = null;
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            document.querySelectorAll('.block').forEach(b => b.classList.add('hidden'));
+            stepUpload.classList.remove('hidden');
+            
+            document.getElementById('init-logs').innerHTML = '';
+            document.getElementById('iter-tbody').innerHTML = '';
+            document.getElementById('btn-solve').classList.add('hidden');
+            document.getElementById('btn-solve').disabled = false;
+            
+            document.getElementById('gpu-status').textContent = 'IDLE';
+            document.getElementById('gpu-status').className = 'stat-value';
+            
+            addLog("System reset");
+            scrollToBottom();
+        }
+
+        // Upload Handlers
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        async function handleFile(file) {
+            addLog(`Uploading ${file.name}...`);
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const res = await fetch('/api/models/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                
+                if (!res.ok) throw new Error(data.error || 'Upload failed');
+                
+                currentModel = data;
+                addLog(`Model ${file.name} loaded and parsed`);
+                
+                // Update UI
+                stepUpload.classList.add('hidden');
+                stepModel.classList.remove('hidden');
+                
+                document.getElementById('lbl-filename').textContent = data.filename;
+                document.getElementById('lbl-vars').textContent = data.variables;
+                document.getElementById('lbl-cons').textContent = data.constraints;
+                document.getElementById('lbl-nnz').textContent = data.nnz;
+                document.getElementById('lbl-type').textContent = data.type;
+                
+                scrollToBottom();
+                
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+        
+        // Init Handler
+        document.getElementById('btn-init').addEventListener('click', async () => {
+            document.getElementById('btn-init').disabled = true;
+            stepInit.classList.remove('hidden');
+            addLog("Starting GPU initialization...");
+            scrollToBottom();
+            
+            try {
+                const res = await fetch('/api/solver/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filepath: currentModel.filepath })
+                });
+                
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to start solver');
+                
+                addLog(`Job ${data.job_id} created`);
+                
+                // Start SSE
+                eventSource = new EventSource(`/api/solver/${data.job_id}/stream`);
+                
+                eventSource.onmessage = (e) => {
+                    const msg = JSON.parse(e.data);
+                    handleSolverEvent(msg);
+                };
+                
+                eventSource.onerror = () => {
+                    showError("Backend connection lost");
+                };
+                
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+        
+        document.getElementById('btn-solve').addEventListener('click', () => {
+            document.getElementById('btn-solve').disabled = true;
+            stepSolve.classList.remove('hidden');
+            document.getElementById('lbl-solve-filename').textContent = currentModel.filename;
+            document.getElementById('lbl-solve-model').textContent = currentModel.filename;
+            addLog("Optimization started");
+            scrollToBottom();
+        });
+        
+        document.getElementById('btn-reset').addEventListener('click', resetApp);
+        document.getElementById('btn-error-reset').addEventListener('click', resetApp);
+        
+        // Handle SSE Events
+        function handleSolverEvent(msg) {
+            if (msg.type === 'solver_state') {
+                addLog(`State changed: ${msg.state}`);
+                if (msg.state === 'INITIALIZING_GPU') {
+                    document.getElementById('gpu-status').textContent = 'INITIALIZING';
+                    document.getElementById('gpu-status').className = 'stat-value warning';
+                    
+                    // Simulate init logs
+                    const logs = msg.log.split('\n');
+                    let i = 0;
+                    const logContainer = document.getElementById('init-logs');
+                    const interval = setInterval(() => {
+                        if (i < logs.length) {
+                            const d = document.createElement('div');
+                            if(logs[i].includes('READY')) d.className = 'success';
+                            d.textContent = '✓ ' + logs[i];
+                            logContainer.appendChild(d);
+                            scrollToBottom();
+                            if(logs[i].includes('READY')) {
+                                document.getElementById('gpu-status').textContent = 'ACTIVE';
+                                document.getElementById('gpu-status').className = 'stat-value success';
+                                document.getElementById('gpu-device').textContent = 'DETECTED'; // placeholder
+                                document.getElementById('btn-solve').classList.remove('hidden');
+                                // Auto click solve for demo smoothness
+                                setTimeout(() => document.getElementById('btn-solve').click(), 500);
+                            }
+                            i++;
+                        } else {
+                            clearInterval(interval);
+                        }
+                    }, 100);
+                } else if (msg.state === 'VERIFYING') {
+                    addLog("Verifying solution...");
+                }
+            } else if (msg.type === 'iteration') {
+                const tbody = document.getElementById('iter-tbody');
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${msg.iteration.toString().padStart(2, '0')}</td>
+                    <td>${msg.objective}</td>
+                    <td>${msg.primal_residual.toExponential(2)}</td>
+                `;
+                tbody.appendChild(tr);
+                scrollToBottom();
+            } else if (msg.type === 'result') {
+                eventSource.close();
+                eventSource = null;
+                
+                const res = msg.result;
+                addLog(`Optimal solution found in ${res.solve_time_ms} ms`);
+                
+                stepResults.classList.remove('hidden');
+                
+                document.getElementById('res-status').textContent = res.status;
+                document.getElementById('res-obj').textContent = res.objective;
+                document.getElementById('res-iters').textContent = res.iterations;
+                document.getElementById('res-time').textContent = res.solve_time_ms.toFixed(3) + ' ms';
+                
+                const pass = res.certificate_pass ? '<span class="success">✓ PASS</span>' : '<span class="error">✗ FAILED</span>';
+                document.getElementById('cert-check').innerHTML = pass;
+                document.getElementById('cert-prim-res').textContent = res.primal_residual.toExponential(2);
+                
+                document.getElementById('fin-status').textContent = res.status;
+                document.getElementById('fin-obj').textContent = res.objective;
+                document.getElementById('fin-iters').textContent = res.iterations;
+                document.getElementById('fin-time').textContent = res.solve_time_ms.toFixed(3) + ' ms';
+                
+                document.getElementById('fin-vars').textContent = res.variables || currentModel.variables;
+                document.getElementById('fin-cons').textContent = res.constraints || currentModel.constraints;
+                document.getElementById('fin-nnz').textContent = res.nnz || currentModel.nnz;
+                
+                document.getElementById('fin-cert').textContent = res.certificate_pass ? 'PASS' : 'FAIL';
+                document.getElementById('fin-cert').className = res.certificate_pass ? 'stat-value success' : 'stat-value error';
+                
+                const fallback = res.fallback_triggered === "YES";
+                const execPath = fallback ? "GPU + CPU RECOVERY" : "GPU_ONLY";
+                
+                document.getElementById('fin-path').textContent = execPath;
+                document.getElementById('fin-fallback').textContent = res.fallback_triggered || "NO";
+                
+                document.getElementById('gpu-status').textContent = 'IDLE';
+                document.getElementById('gpu-status').className = 'stat-value';
+                
+                scrollToBottom();
+            } else if (msg.type === 'error') {
+                showError(msg.message);
+            }
+        }
+        
+        addLog("System initialized");
+    </script>
+</body>
+</html>

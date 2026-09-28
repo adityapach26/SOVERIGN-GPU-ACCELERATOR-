@@ -52,6 +52,15 @@ constexpr Float kIPMNormalEquationRegularization = 1e-9;
     }                                                                          \
 }
 
+
+__global__ void vector_sub_kernel(Index m, const Float* a, const Float* b, Float* c) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) c[i] = a[i] - b[i];
+}
+__global__ void fill_ones_kernel(Index m, Float* a) {
+    Index i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) a[i] = 1.0;
+}
 __global__ void permute_vector_kernel(Index n, const Float* in, Float* out, const Index* P) {
     Index i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) out[i] = in[P[i]];
@@ -545,8 +554,27 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     CHECK_CUSPARSE(cusparseCreateDnVec(&vec_correction, m_, d_correction, CUDA_R_64F));
     
     Float alpha = 1.0;
+    Float beta_zero = 0.0;
     Float rhs_norm = compute_norm_kkt(m_, d_rhs_perm_orig);
     
+    // --- Diagnostics Setup ---
+    Float* d_diag_spmv = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+    Float* d_diag_sub = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+    Float* d_ones = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+    int blocks_diag = (m_ + 255) / 256;
+    fill_ones_kernel<<<blocks_diag, 256>>>(m_, d_ones);
+
+    Index nnz_M = 0;
+    CHECK_CUDA(cudaMemcpy(&nnz_M, d_M_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
+    cusparseSpMatDescr_t descr_M0, descr_Mdelta;
+    CHECK_CUSPARSE(cusparseCreateCsr(&descr_M0, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+    CHECK_CUSPARSE(cusparseCreateCsr(&descr_Mdelta, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+    cusparseDnVecDescr_t vec_diag_spmv;
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_diag_spmv, m_, d_diag_spmv, CUDA_R_64F));
+    cusparseDnVecDescr_t vec_ones;
+    CHECK_CUSPARSE(cusparseCreateDnVec(&vec_ones, m_, d_ones, CUDA_R_64F));
+    // -------------------------
+
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     
@@ -579,6 +607,31 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             CHECK_CUDA(cudaDeviceSynchronize());
             
             CHECK_CUDA(cudaMemcpy(&h_error, d_factorization_error_, sizeof(int), cudaMemcpyDeviceToHost));
+            if (h_error == 0) {
+                size_t spmv_buf = 0;
+                void* d_spmv = nullptr;
+                
+                CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta, vec_ones, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+                d_spmv = arena_.allocate(spmv_buf);
+                CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta, vec_ones, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+                arena_.free(d_spmv);
+                
+                CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+                d_spmv = arena_.allocate(spmv_buf);
+                CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_ones, &beta_zero, vec_z, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+                arena_.free(d_spmv);
+                
+                CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_z, &beta_zero, vec_r, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+                d_spmv = arena_.allocate(spmv_buf);
+                CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_z, &beta_zero, vec_r, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+                arena_.free(d_spmv);
+                
+                vector_sub_kernel<<<blocks, threads>>>(m_, d_diag_spmv, d_r_perm, d_diag_sub);
+                CHECK_CUDA(cudaDeviceSynchronize());
+                Float chol_residual = compute_norm_kkt(m_, d_diag_sub);
+                std::cout << "    [KKT] Cholesky residual ||M_delta*e - L*L^T*e||inf: " << chol_residual << std::endl;
+            }
+            
             if (h_error > 0) {
                 std::cout << "    [KKT] Factorization failed at delta = " << delta << std::endl;
                 std::cout << "    [KKT] REFINEMENT_EXIT=FACTORIZATION_FAILURE" << std::endl;
@@ -600,6 +653,16 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
         
         Float initial_dy_norm = compute_norm_kkt(m_, d_dy_perm);
+
+        size_t spmv_buf = 0;
+        CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_M0, vec_dy, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+        void* d_spmv = arena_.allocate(spmv_buf);
+        CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_M0, vec_dy, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+        vector_sub_kernel<<<blocks, threads>>>(m_, d_rhs_perm_orig, d_diag_spmv, d_diag_sub);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        Float method_b_residual = compute_norm_kkt(m_, d_diag_sub);
+        arena_.free(d_spmv);
+        std::cout << "    [KKT] Method B (cuSPARSE) initial M0 residual: " << method_b_residual << std::endl;
 
         // --- COMPUTE INITIAL PHYSICAL UNREGULARIZED RESIDUAL: r0 = rhs - M0 * dy ---
         compute_M_residual_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_dy_perm, d_rhs_perm_orig, d_r_perm);
@@ -639,6 +702,15 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             
             correction_norm = compute_norm_kkt(m_, d_correction);
             
+            size_t spmv_buf = 0;
+            CHECK_CUSPARSE(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta, vec_correction, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf));
+            void* d_spmv = arena_.allocate(spmv_buf);
+            CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta, vec_correction, &beta_zero, vec_diag_spmv, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv));
+            vector_sub_kernel<<<blocks, threads>>>(m_, d_diag_spmv, d_r_perm, d_diag_sub);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            Float correction_equation_residual = compute_norm_kkt(m_, d_diag_sub);
+            arena_.free(d_spmv);
+            
             // dy = dy + correction
             add_correction_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_correction);
             CHECK_CUDA(cudaDeviceSynchronize());
@@ -648,9 +720,17 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             CHECK_CUDA(cudaDeviceSynchronize());
             r0_norm_after = compute_norm_kkt(m_, d_r_perm);
             
-            std::cout << "    [KKT]   refinement iter " << iter << " before: " << r0_norm_before 
-                      << " correction_norm: " << correction_norm 
-                      << " after: " << r0_norm_after << std::endl;
+            std::cout << "    [KKT] REFINE:\n"
+                      << "      iteration: " << iter << "\n"
+                      << "      delta: " << delta << "\n"
+                      << "      rhs_norm: " << rhs_norm << "\n"
+                      << "      dy_norm: " << initial_dy_norm << "\n"
+                      << "      residual_before_inf: " << r0_norm_before << "\n"
+                      << "      correction_norm_inf: " << correction_norm << "\n"
+                      << "      correction_equation_residual: " << correction_equation_residual << "\n"
+                      << "      residual_after_inf: " << r0_norm_after << "\n"
+                      << "      reduction_ratio: " << r0_norm_after / std::max(Float(1e-30), r0_norm_before) << std::endl;
+
 
             if (r0_norm_after <= required_abs_tol) {
                 refinement_converged = true;
@@ -660,7 +740,6 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             
             if (r0_norm_after >= r0_norm_before) {
                 // Stagnation
-                r0_norm_after = r0_norm_before;
                 exit_reason = "STAGNATED";
                 break;
             }
@@ -670,12 +749,21 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         
         std::cout << "    [KKT] REFINEMENT_EXIT=" << exit_reason << std::endl;
         std::cout << "    [KKT] Refinement iterations: " << (iter == max_refinement_iters ? iter : iter + 1) << std::endl;
+        std::cout << "    [KKT] final_physical_residual: " << r0_norm_after << std::endl;
         
         if (refinement_converged) {
             success = true;
             break;
         }
     }
+    
+    cusparseDestroySpMat(descr_M0);
+    cusparseDestroySpMat(descr_Mdelta);
+    cusparseDestroyDnVec(vec_diag_spmv);
+    cusparseDestroyDnVec(vec_ones);
+    arena_.free(d_ones);
+    arena_.free(d_diag_sub);
+    arena_.free(d_diag_spmv);
     
     if (!success) {
         std::cout << "    [Retry] All adaptive regularization retries exhausted." << std::endl;

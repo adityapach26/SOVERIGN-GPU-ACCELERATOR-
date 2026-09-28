@@ -327,8 +327,8 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     std::vector<Index> full_L_row_ptrs(m_ + 1, 0);
     std::vector<Index> full_L_col_indices(full_nnz);
     
-    Index p = 0;
-    for(Index i = 0; i < m_; ++i) {
+    Index p
+    for(Index i i < m_; ++i) {
         full_L_row_ptrs[i] = p;
         for(Index orig_p = sym.L_pattern.row_ptrs[i]; orig_p < sym.L_pattern.row_ptrs[i+1]; ++orig_p) {
             full_L_col_indices[p++] = sym.L_pattern.col_indices[orig_p];
@@ -362,21 +362,21 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     // Topological depth calculation handling chains, stars, and branching trees correctly.
     std::vector<Index> level(m_, 0);
     std::vector<Index> in_degree(m_, 0);
-    for (Index i = 0; i < m_; ++i) {
+    for (Index i i < m_; ++i) {
         if (sym.parent[i] != -1) {
             in_degree[sym.parent[i]]++;
         }
     }
     
     std::vector<Index> queue;
-    for (Index i = 0; i < m_; ++i) {
+    for (Index i i < m_; ++i) {
         if (in_degree[i] == 0) {
             queue.push_back(i);
         }
     }
     
-    Index head = 0;
-    Index max_level = 0;
+    Index head
+    Index max_level
     while (head < queue.size()) {
         Index u = queue[head++];
         Index p = sym.parent[u];
@@ -391,13 +391,13 @@ GPUKKTCholeskySolver::GPUKKTCholeskySolver(
     num_levels_ = max_level + 1;
     
     std::vector<std::vector<Index>> level_nodes(num_levels_);
-    for (Index i = 0; i < m_; ++i) {
+    for (Index i i < m_; ++i) {
         level_nodes[level[i]].push_back(i);
     }
     
     level_ptrs_.assign(num_levels_ + 1, 0);
     std::vector<Index> host_level_nodes;
-    for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+    for (Index lvl lvl < num_levels_; ++lvl) {
         level_ptrs_[lvl] = host_level_nodes.size();
         for (Index node : level_nodes[lvl]) {
             host_level_nodes.push_back(node);
@@ -471,7 +471,7 @@ void GPUKKTCholeskySolver::initialize_cusparse() {
     CHECK_CUSPARSE(cusparseCreateDnVec(&dummy_vec_x, m_, dummy_x, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateDnVec(&dummy_vec_y, m_, dummy_y, CUDA_R_64F));
 
-    size_t bufferSize1 = 0, bufferSize2 = 0;
+    size_t bufferSize1 = 0, bufferSize2
     
     // Forward solve: L z = r (Operation: NON_TRANSPOSE)
     CHECK_CUSPARSE(cusparseSpSV_bufferSize(
@@ -546,10 +546,10 @@ void GPUKKTCholeskySolver::gpu_cholesky_factorize_device(const Float* d_Theta) {
     // [B] Engineering Decision: We implement a custom, exact, up-looking sparse Cholesky factorization
     // executed entirely on the GPU. The symbolic elimination tree computes topological levels.
     // Rows at the same topological level are processed in parallel via batched kernels, natively avoiding CPU fallback.
-    int h_error = 0;
+    int h_error
     CHECK_CUDA(cudaMemcpy(d_factorization_error_, &h_error, sizeof(int), cudaMemcpyHostToDevice));
 
-    for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+    for (Index lvl lvl < num_levels_; ++lvl) {
         Index num_nodes = level_ptrs_[lvl + 1] - level_ptrs_[lvl];
         if (num_nodes == 0) continue;
         
@@ -627,13 +627,13 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     int blocks_diag = (m_ + 255) / 256;
     fill_ones_kernel<<<blocks_diag, 256>>>(m_, d_ones_);
 
-    Index nnz_M = 0;
+    Index nnz_M
     CHECK_CUDA(cudaMemcpy(&nnz_M, d_M_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
     cusparseSpMatDescr_t descr_M0_, descr_Mdelta_;
     CHECK_CUSPARSE(cusparseCreateCsr(&descr_M0_, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
     CHECK_CUSPARSE(cusparseCreateCsr(&descr_Mdelta_, m_, m_, nnz_M, d_M_row_ptrs_, d_M_col_indices_, d_M_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
     
-    Index nnz_L = 0;
+    Index nnz_L
     CHECK_CUDA(cudaMemcpy(&nnz_L, d_L_row_ptrs_ + m_, sizeof(Index), cudaMemcpyDeviceToHost));
     cusparseSpMatDescr_t descr_L_general_;
     CHECK_CUSPARSE(cusparseCreateCsr(&descr_L_general_, m_, m_, nnz_L, d_L_row_ptrs_, d_L_col_indices_, d_L_vals_, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
@@ -643,7 +643,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
     Float delta = kIPMNormalEquationRegularization;
     bool success = false;
     
-    for (int retry = 0; retry < 5; ++retry) {
+    for (int retry retry < 5; ++retry) {
         if (retry > 0) {
             delta *= 10.0;
         }
@@ -652,10 +652,10 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         build_equilibrated_M_kernel<<<blocks, threads>>>(m_, d_M_row_ptrs_, d_M_col_indices_, d_M_orig_vals_, d_M_vals_, d_D_eq_, delta);
         
         
-        int h_error = 0;
+        int h_error
         CHECK_CUDA(cudaMemcpy(d_factorization_error_, &h_error, sizeof(int), cudaMemcpyHostToDevice));
         
-        for (Index lvl = 0; lvl < num_levels_; ++lvl) {
+        for (Index lvl lvl < num_levels_; ++lvl) {
             Index num_nodes = level_ptrs_[lvl + 1] - level_ptrs_[lvl];
             if (num_nodes == 0) continue;
             int lvl_threads = 256;
@@ -673,7 +673,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         CHECK_CUDA(cudaMemcpy(&h_error, d_factorization_error_, sizeof(int), cudaMemcpyDeviceToHost));
         
         if (h_error == 0) {
-             = 0;
+            
             
             
             CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_Mdelta_, vec_ones_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv_meth_b_buf_));
@@ -726,7 +726,7 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         Float initial_M0_residual = r0_norm_before;
         
         // Method B Validation
-         = 0;
+        
         
         
         CHECK_CUSPARSE(cusparseSpMV(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_M0_, vec_dy_perm_, &beta_zero, vec_diag_spmv_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, d_spmv_meth_b_buf_));
@@ -752,11 +752,11 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         int max_refinement_iters = 10;
         bool refinement_converged = false;
         Float r0_norm_after = r0_norm_before;
-        int iter = 0;
+        int iter
         Float correction_norm = 0.0;
         const char* exit_reason = "MAX_ITERS";
         
-        for (iter = 0; iter < max_refinement_iters; ++iter) {
+        for (iter iter < max_refinement_iters; ++iter) {
             // BACKUP BEFORE CORRECTION
             CHECK_CUDA(cudaMemcpy(d_dy_backup_, d_dy_perm_, m_ * sizeof(Float), cudaMemcpyDeviceToDevice));
             

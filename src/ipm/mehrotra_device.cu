@@ -438,18 +438,18 @@ public:
         CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_rkkt_, m_, d_r_kkt_, CUDA_R_64F));
         CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_dy_,   m_, d_r_kkt_, CUDA_R_64F)); // dy reuses d_r_kkt_ in-place
         
-        d_tmp_x__ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        d_tmp_s__ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        d_bt_x__ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        d_bt_y__ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-        d_bt_s__ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
-        d_bt_rp__ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
-        d_bt_rd__ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        d_tmp_x_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        d_tmp_s_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        d_bt_x_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        d_bt_y_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+        d_bt_s_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
+        d_bt_rp_ = static_cast<Float*>(arena_.allocate(m_ * sizeof(Float)));
+        d_bt_rd_ = static_cast<Float*>(arena_.allocate(n_ * sizeof(Float)));
         
-        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_x_, n_, d_bt_x__, CUDA_R_64F));
-        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_y_, m_, d_bt_y__, CUDA_R_64F));
-        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_rp_, m_, d_bt_rp__, CUDA_R_64F));
-        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_rd_, n_, d_bt_rd__, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_x_, n_, d_bt_x_, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_y_, m_, d_bt_y_, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_rp_, m_, d_bt_rp_, CUDA_R_64F));
+        CHECK_CUSPARSE_IPM(cusparseCreateDnVec(&vec_bt_rd_, n_, d_bt_rd_, CUDA_R_64F));
         
         Float alpha_dummy = 1.0;
         CHECK_CUSPARSE_IPM(cusparseSpMV_bufferSize(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha_dummy, descr_A_, vec_x_, &alpha_dummy, vec_y_, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &spmv_buf_size_A_));
@@ -678,8 +678,8 @@ private:
     Float *d_b_, *d_c_;
     
     // Persistent buffers
-    Float *d_tmp_x__, *d_tmp_s__;
-    Float *d_bt_x__, *d_bt_y__, *d_bt_s__, *d_bt_rp__, *d_bt_rd__;
+    Float *d_tmp_x_, *d_tmp_s_;
+    Float *d_bt_x_, *d_bt_y_, *d_bt_s_, *d_bt_rp_, *d_bt_rd_;
     cusparseDnVecDescr_t vec_bt_x_, vec_bt_y_, vec_bt_rp_, vec_bt_rd_;
     void *d_spmv_buf_A_, *d_spmv_buf_AT_;
     size_t spmv_buf_size_A_, spmv_buf_size_AT_;

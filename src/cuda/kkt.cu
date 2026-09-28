@@ -464,11 +464,11 @@ void GPUKKTCholeskySolver::initialize_cusparse() {
         &alpha, descr_L_, dummy_vec_x, dummy_vec_y, CUDA_R_64F,
         CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, &bufferSize2));
 
-    size_t bufferSize = std::max(bufferSize1, bufferSize2);
-    if (bufferSize > 0) {
-        d_spsv_buffer_ = arena_.allocate(bufferSize);
-    } else {
-        d_spsv_buffer_ = nullptr;
+    if (bufferSize1 > 0) {
+        d_spsv_buffer_L_ = arena_.allocate(bufferSize1);
+    }
+    if (bufferSize2 > 0) {
+        d_spsv_buffer_LT_ = arena_.allocate(bufferSize2);
     }
 
     CHECK_CUSPARSE(cusparseDestroyDnVec(dummy_vec_x));
@@ -693,9 +693,9 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
         scale_vector_kernel<<<blocks, threads>>>(m_, d_rhs_perm_orig, d_D, d_r_eq);
         CHECK_CUDA(cudaDeviceSynchronize());
 
-        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_rhs, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_));
+        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_rhs, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_, d_spsv_buffer_L_));
         CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, descr_L_, vec_rhs, vec_z, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_L_));
-        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_));
+        CHECK_CUSPARSE(cusparseSpSV_analysis(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_, d_spsv_buffer_LT_));
         CHECK_CUSPARSE(cusparseSpSV_solve(handle_, CUSPARSE_OPERATION_TRANSPOSE, &alpha, descr_L_, vec_z, vec_dy, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, spsv_descr_LT_));
         
         scale_vector_kernel<<<blocks, threads>>>(m_, d_dy_perm, d_D, d_dy_perm);

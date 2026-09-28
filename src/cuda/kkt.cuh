@@ -117,7 +117,8 @@ private:
     cusparseSpSVDescr_t spsv_descr_LT_;
     cusparseDnVecDescr_t vec_rhs_;
     cusparseDnVecDescr_t vec_z_;
-    void* d_spsv_buffer_;
+    void* d_spsv_buffer_L_ = nullptr;
+    void* d_spsv_buffer_LT_ = nullptr;
 
     void initialize_cusparse();
 };

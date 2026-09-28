@@ -5,7 +5,7 @@
  * @brief CUDA Memory Pool / Persistent VRAM Arena implementation (Step 9.1)
  */
 
-#include "vram_arena.cuh"
+#include "vram_arena.cuh"`n#include "../profiler.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -29,7 +29,7 @@ VRAMArena::VRAMArena(std::size_t capacity_bytes)
     , currently_allocated_(0)
 {
     // The architecture strictly requires one contiguous pre-allocated device buffer.
-    check_cuda_error(cudaMalloc(&d_base_ptr_, total_capacity_), "VRAMArena constructor failed to allocate persistent buffer");
+    sankhya::profile::start_cpu("Device initialization"); check_cuda_error(cudaMalloc(&d_base_ptr_, total_capacity_), "VRAMArena constructor failed to allocate persistent buffer"); sankhya::profile::stop_cpu("Device initialization");
     
     // Initialize the free list with a single block covering the entire arena
     free_list_.push_back({0, total_capacity_});

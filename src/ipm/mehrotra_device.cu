@@ -1045,8 +1045,10 @@ MehrotraResult MehrotraSolver::Impl::solve() {
     
     result.x.resize(n_);
     result.pi.resize(m_);
+    sankhya::profile::start_cpu("D->H transfer");
     CHECK_CUDA_IPM(cudaMemcpy(result.x.data(), d_x_, n_ * sizeof(Float), cudaMemcpyDeviceToHost));
     CHECK_CUDA_IPM(cudaMemcpy(result.pi.data(), d_y_, m_ * sizeof(Float), cudaMemcpyDeviceToHost));
+    sankhya::profile::stop_cpu("D->H transfer");
     for (Index i = 0; i < n_; ++i) result.x[i] *= C_[i];
     for (Index i = 0; i < m_; ++i) result.pi[i] *= R_[i];
     

@@ -505,7 +505,7 @@ private:
         arena_.free(dbuf);
 
         record_gpu_start("kernel_compute_e3");
-    compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
+    kernels::compute_e3_kernel<<<blocks_n, 256>>>(n_, d_s_, d_dx, d_x_, d_ds, d_r_xs, d_r3);
     record_gpu_stop();
         
         sankhya::profile::stop_cpu("KKT vector/matrix operations");

@@ -115,12 +115,17 @@ def start_solver():
         if not os.path.exists(exe_path):
             exe_path = r"./build/tests/sankhya_benchmark_cli" # Linux/Mac fallback
             
+        print(f"[SOLVER] executable = {exe_path}")
+        print(f"[SOLVER] model = {filepath}")
+        print(f"[SOLVER] cwd = {os.getcwd()}")
+        print(f"[SOLVER] command = {exe_path} {filepath}")
+            
         try:
             # Start process
             process = subprocess.Popen(
                 [exe_path, filepath],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1
             )
@@ -131,10 +136,11 @@ def start_solver():
             all_lines = []
             emitted_states = set()
             
+            # Read stdout line by line
             for line in process.stdout:
+                all_lines.append(line)
                 line = line.strip()
                 if not line: continue
-                all_lines.append(line)
                 
                 m = re.search(r'Iter (\d+) \| rp: ([0-9eE\.\-]+) \| rd: ([0-9eE\.\-]+)', line)
                 if m:
@@ -147,24 +153,47 @@ def start_solver():
                 elif "[KKT Verify]" in line and "VERIFYING" not in emitted_states:
                     emitted_states.add("VERIFYING")
                     q.put({"type": "solver_state", "state": "VERIFYING"})
-                        
-            process.wait()
             
-            # Extract final JSON robustly
-            json_str = None
-            for i in range(len(all_lines)-1, -1, -1):
-                if all_lines[i] == '{':
-                    json_str = "\n".join(all_lines[i:])
-                    break
-                    
-            if json_str:
+            # Wait for completion and read stderr
+            process.wait()
+            stderr_output = process.stderr.read()
+            
+            return_code = process.returncode
+            stdout_str = "".join(all_lines)
+            
+            print(f"[SOLVER] return_code = {return_code}")
+            print(f"[SOLVER] stdout_bytes = {len(stdout_str.encode('utf-8'))}")
+            print(f"[SOLVER] stderr_bytes = {len(stderr_output.encode('utf-8'))}")
+            
+            if len(stdout_str) == 0:
+                print("[SOLVER] STDOUT EMPTY")
+            if len(stderr_output) > 0:
+                print("[SOLVER] STDERR:")
+                print(stderr_output)
+            
+            if return_code != 0:
+                q.put({
+                    "type": "error",
+                    "message": f"SOLVER PROCESS FAILED\n\nExit code: {return_code}\n\nSee system log for stderr."
+                })
+                return
+                
+            # Robust extraction: find the last occurrence of { and }
+            json_start = stdout_str.rfind('{')
+            json_end = stdout_str.rfind('}')
+            
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                json_str = stdout_str[json_start:json_end+1]
                 try:
                     result = json.loads(json_str)
-                    q.put({"type": "result", "result": result})
+                    if "solver" in result and "status" in result:
+                        q.put({"type": "result", "result": result})
+                    else:
+                        q.put({"type": "error", "message": "RESULT PARSING FAILED\n\nJSON found but missing required fields."})
                 except json.JSONDecodeError:
-                    q.put({"type": "error", "message": "Failed to parse solver result"})
+                    q.put({"type": "error", "message": "RESULT PARSING FAILED\n\nSolver exited successfully but no valid result JSON was found."})
             else:
-                q.put({"type": "error", "message": "Solver produced no JSON output. It may have crashed."})
+                q.put({"type": "error", "message": "RESULT PARSING FAILED\n\nSolver exited successfully but no JSON object was found in stdout."})
                 
         except Exception as e:
             q.put({"type": "error", "message": str(e)})

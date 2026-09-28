@@ -770,24 +770,15 @@ bool GPUKKTCholeskySolver::gpu_cholesky_solve_device(Float* d_rhs_orig, Float re
             CHECK_CUDA(cudaDeviceSynchronize());
             r0_norm_after = compute_norm_kkt(m_, d_r_perm);
             
-            std::cout << "    [KKT] REFINE:
-"
-                      << "      iteration: " << iter << "
-"
-                      << "      delta: " << delta << "
-"
-                      << "      rhs_norm: " << rhs_norm << "
-"
-                      << "      dy_norm: " << initial_dy_norm << "
-"
-                      << "      residual_before_inf: " << r0_norm_before << "
-"
-                      << "      correction_norm_inf: " << correction_norm << "
-"
-                      << "      correction_equation_residual (equilibrated): " << correction_equation_residual << "
-"
-                      << "      residual_after_inf: " << r0_norm_after << "
-"
+            std::cout << "    [KKT] REFINE:\n"
+                      << "      iteration: " << iter << "\n"
+                      << "      delta: " << delta << "\n"
+                      << "      rhs_norm: " << rhs_norm << "\n"
+                      << "      dy_norm: " << initial_dy_norm << "\n"
+                      << "      residual_before_inf: " << r0_norm_before << "\n"
+                      << "      correction_norm_inf: " << correction_norm << "\n"
+                      << "      correction_equation_residual (equilibrated): " << correction_equation_residual << "\n"
+                      << "      residual_after_inf: " << r0_norm_after << "\n"
                       << "      reduction_ratio: " << r0_norm_after / std::max(Float(1e-30), r0_norm_before) << std::endl;
 
             if (r0_norm_after <= required_abs_tol) {

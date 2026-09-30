@@ -1,8 +1,8 @@
-# SANKHYA / VAJRA-OPT
+# LAKSHYA
 
 **Indigenous GPU-Accelerated Optimization Solver**
 
-SANKHYA (also operating under the VAJRA-OPT initiative) is a high-performance, GPU-native mathematical optimization engine. Designed for research and industrial-scale problems, it leverages massively parallel architecture to solve complex Linear Programming (LP) and related optimization models with speed and precision.
+LAKSHYA is a high-performance, GPU-native mathematical optimization engine. Designed for research and industrial-scale problems, it leverages massively parallel architecture to solve complex Linear Programming (LP) and related optimization models with speed and precision.
 
 ## Key Features
 

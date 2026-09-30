@@ -21,6 +21,13 @@ LAKSHYA is a high-performance, GPU-native mathematical optimization engine. Desi
 * `src/core/` - Sparse matrix representations (CSR/CSC) and core data types.
 * `app.py` - Flask-based backend for the LAKSHYA Engineering Console.
 
+## Requirements
+
+* **Compiler**: C++17 compatible compiler (e.g., GCC 7+, Clang 5+, MSVC 2017+)
+* **Build System**: CMake 3.18 or higher
+* **GPU Computing**: NVIDIA CUDA Toolkit (includes `nvcc`, `cuSPARSE`, and `Thrust`)
+* **Python Environment** (for the UI): Python 3.8+ with `Flask` installed (`pip install Flask`)
+
 ## Building the Solver
 
 The project uses CMake for its build system. It requires a compatible C++17 compiler and the NVIDIA CUDA Toolkit.
